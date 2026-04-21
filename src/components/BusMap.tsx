@@ -139,6 +139,37 @@ interface SearchResult {
   lineInfo?: LineInfo;
 }
 
+const LINE_SEARCH_QUERY = `
+  query($publicCode: String!) {
+    lines(publicCode: $publicCode) {
+      id publicCode name transportMode
+      operator { id name }
+    }
+  }
+`;
+
+async function searchLines(publicCode: string): Promise<LineInfo[]> {
+  if (!publicCode.trim()) return [];
+  try {
+    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      body: JSON.stringify({ query: LINE_SEARCH_QUERY, variables: { publicCode } }),
+    });
+    const json = await res.json();
+    return (json.data?.lines ?? [])
+      .filter((l: any) => l.publicCode && l.transportMode !== "water" && l.transportMode !== "air")
+      .map((l: any) => ({
+        id: l.id,
+        publicCode: l.publicCode,
+        name: l.name ?? l.publicCode,
+        color: operatorColor(l.operator?.id),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 async function searchPlaces(text: string): Promise<SearchResult[]> {
   if (!text.trim()) return [];
   try {
@@ -175,12 +206,21 @@ function SearchControl({ lines, onLineSelect }: { lines: LineInfo[]; onLineSelec
     if (!val.trim()) { setResults([]); setOpen(false); return; }
     debounceRef.current = setTimeout(async () => {
       const q = val.trim().toLowerCase();
-      const lineResults: SearchResult[] = lines
-        .filter((l) => l.publicCode.toLowerCase().includes(q) || l.name.toLowerCase().includes(q))
-        .slice(0, 4)
+
+      const rankLine = (code: string) => code.toLowerCase() === q ? 0 : 1;
+
+      const localLineResults: SearchResult[] = lines
+        .filter((l) => l.publicCode.toLowerCase().startsWith(q) || l.name.toLowerCase().includes(q))
+        .sort((a, b) => rankLine(a.publicCode) - rankLine(b.publicCode))
+        .slice(0, 3)
         .map((l) => ({ id: l.id, label: `${l.publicCode} – ${l.name}`, lat: 0, lng: 0, isStop: false, lineInfo: l }));
-      const stopResults = await searchPlaces(val);
-      const combined = [...lineResults, ...stopResults].slice(0, 8);
+      const seenIds = new Set(localLineResults.map((r) => r.id));
+      const [apiLines, stopResults] = await Promise.all([searchLines(val.trim()), searchPlaces(val)]);
+      const apiLineResults: SearchResult[] = apiLines
+        .filter((l) => !seenIds.has(l.id))
+        .sort((a, b) => rankLine(a.publicCode) - rankLine(b.publicCode))
+        .map((l) => ({ id: l.id, label: `${l.publicCode} – ${l.name}`, lat: 0, lng: 0, isStop: false, lineInfo: l }));
+      const combined = [...localLineResults, ...apiLineResults, ...stopResults].slice(0, 8);
       setResults(combined);
       setOpen(combined.length > 0);
     }, 250);

@@ -331,7 +331,7 @@ const stopIconHighlight = L.divIcon({
   iconAnchor: [11, 11],
 });
 
-export function StopsLayer() {
+export function StopsLayer({ visible, routesVisible }: { visible?: boolean; routesVisible?: boolean }) {
   const map = useMap();
   const markers = useRef<Map<string, L.Marker>>(new Map());
   const stopNames = useRef<Map<string, string>>(new Map());
@@ -341,6 +341,26 @@ export function StopsLayer() {
   const highlightedStopId = useRef<string | null>(null);
   const highlightedMarker = useRef<L.Marker | null>(null);
   const highlightTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibleRef = useRef(visible !== false);
+  visibleRef.current = visible !== false;
+  const routesVisibleRef = useRef(routesVisible !== false);
+  routesVisibleRef.current = routesVisible !== false;
+
+  useEffect(() => {
+    const show = visible !== false;
+    for (const m of markers.current.values()) {
+      m.setOpacity(show ? 1 : 0);
+      if (!show) m.closeTooltip();
+      else if (map.getZoom() >= LABEL_MIN_ZOOM) m.openTooltip();
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    const show = routesVisible !== false;
+    for (const p of stopPolylines.current) {
+      if (show) p.addTo(map); else p.remove();
+    }
+  }, [routesVisible, map]);
 
   function applyHighlight(stopId: string) {
     if (highlightedMarker.current) {
@@ -387,6 +407,7 @@ export function StopsLayer() {
         stopNames.current.set(stop.id, stop.name);
         const icon = highlightedStopId.current === stop.id ? stopIconHighlight : stopIcon;
         const marker = L.marker([stop.latitude, stop.longitude], { icon, zIndexOffset: 500 }).addTo(map);
+        if (!visibleRef.current) marker.setOpacity(0);
         if (highlightedStopId.current === stop.id) highlightedMarker.current = marker;
 
         const popup = L.popup({
@@ -450,6 +471,7 @@ export function StopsLayer() {
           offset: [6, 0],
           className: "stop-label-tooltip",
         });
+        if (!visibleRef.current) marker.closeTooltip();
 
         marker.on("mouseover", startHover);
         marker.on("mouseout", endHover);
@@ -494,7 +516,9 @@ export function StopsLayer() {
                   for (const encoded of route.shapes) {
                     const pts = decodePolyline(encoded);
                     if (pts.length < 2) continue;
-                    added.push(L.polyline(pts, { color: "#e63946", weight: 5, opacity: 0.85 }).addTo(map));
+                    const pl = L.polyline(pts, { color: "#e63946", weight: 5, opacity: 0.85 });
+                    if (routesVisibleRef.current) pl.addTo(map);
+                    added.push(pl);
                   }
                 });
                 stopPolylines.current = added;

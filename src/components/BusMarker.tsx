@@ -199,15 +199,20 @@ interface Props {
   onLinesChange?: (lines: LineInfo[]) => void;
   onLineSelect?: (line: LineInfo | null) => void;
   selectedLineId?: string | null;
+  visible?: boolean;
 }
 
-export function BusMarkersLayer({ vehicles, onOperatorsChange, onLinesChange, onLineSelect, selectedLineId }: Props) {
+export function BusMarkersLayer({ vehicles, onOperatorsChange, onLinesChange, onLineSelect, selectedLineId, visible }: Props) {
   const map = useMap();
   const markers = useRef<Map<string, L.Marker>>(new Map());
   const vehicleData = useRef<Map<string, Vehicle>>(new Map());
   const anims = useRef<Map<string, AnimState>>(new Map());
   const bearings = useRef<Map<string, number>>(new Map());
   const settled = useRef<Set<string>>(new Set());
+  const selectedLineIdRef = useRef(selectedLineId);
+  selectedLineIdRef.current = selectedLineId;
+  const visibleRef = useRef(visible !== false);
+  visibleRef.current = visible !== false;
 
   const updateVisibleOperators = useRef<() => void>(() => {});
   updateVisibleOperators.current = () => {
@@ -244,14 +249,14 @@ export function BusMarkersLayer({ vehicles, onOperatorsChange, onLinesChange, on
     onLinesChange?.([...lineMap.values()]);
   };
 
-  // Dim markers that don't belong to the selected line
+  // Dim or hide markers based on selected line and visibility toggle
   useEffect(() => {
     for (const [id, marker] of markers.current) {
       const v = vehicleData.current.get(id);
       const match = !selectedLineId || v?.line?.lineRef === selectedLineId;
-      marker.setOpacity(match ? 1 : 0);
+      marker.setOpacity(visible !== false && match ? 1 : 0);
     }
-  }, [selectedLineId]);
+  }, [selectedLineId, visible]);
 
   // Re-filter legend when the viewport changes
   useEffect(() => {
@@ -302,6 +307,8 @@ export function BusMarkersLayer({ vehicles, onOperatorsChange, onLinesChange, on
         const marker = L.marker([latitude, longitude], { icon: busIcon(label, color) })
           .bindTooltip(tooltipContent(v), { direction: "top", offset: [0, -16], className: "veh-tooltip" })
           .addTo(map);
+        const initMatch = !selectedLineIdRef.current || v.line?.lineRef === selectedLineIdRef.current;
+        marker.setOpacity(visibleRef.current && initMatch ? 1 : 0);
 
         marker.on("click", () => {
           const vehicle = vehicleData.current.get(v.vehicleId) ?? v;

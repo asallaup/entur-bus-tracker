@@ -192,12 +192,17 @@ async function searchPlaces(text: string): Promise<SearchResult[]> {
   }
 }
 
-function SearchControl({ lines, onLineSelect }: { lines: LineInfo[]; onLineSelect: (line: LineInfo) => void }) {
-  const map = useMap();
+function SearchControl({ map, lines, onLineSelect }: { map: L.Map; lines: LineInfo[]; onLineSelect: (line: LineInfo) => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [open, setOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const close = () => { setOpen(false); setQuery(""); setResults([]); };
+    map.on("popupopen", close);
+    return () => { map.off("popupopen", close); };
+  }, [map]);
 
   function handleInput(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value;
@@ -352,27 +357,37 @@ async function fetchRouteShapes(lineId: string): Promise<string[]> {
   }
 }
 
-function RouteLayer({ line }: { line: LineInfo | null }) {
+function RouteLayer({ line, allLines, visible }: { line: LineInfo | null; allLines: LineInfo[]; visible?: boolean }) {
   const map = useMap();
   const polylinesRef = useRef<L.Polyline[]>([]);
+  const allLinesRef = useRef(allLines);
+  allLinesRef.current = allLines;
 
   useEffect(() => {
     polylinesRef.current.forEach((p) => p.remove());
     polylinesRef.current = [];
-    if (!line) return;
+
+    // Selected line always shows, regardless of Routes toggle
+    const linesToDraw = line ? [line] : (visible !== false ? allLinesRef.current.slice(0, 30) : []);
+    if (linesToDraw.length === 0) return;
 
     let cancelled = false;
 
-    fetchRouteShapes(line.id).then((shapes) => {
+    Promise.all(linesToDraw.map((l) => fetchRouteShapes(l.id))).then((shapesArray) => {
       if (cancelled) return;
       const added: L.Polyline[] = [];
-      for (const encoded of shapes) {
-        const points = decodePolyline(encoded);
-        if (points.length < 2) continue;
-        added.push(L.polyline(points, { color: "#e63946", weight: 5, opacity: 0.85 }).addTo(map));
+      for (let i = 0; i < linesToDraw.length; i++) {
+        const shapes = shapesArray[i];
+        const color = line ? "#e63946" : linesToDraw[i].color;
+        const weight = line ? 5 : 4;
+        for (const encoded of shapes) {
+          const points = decodePolyline(encoded);
+          if (points.length < 2) continue;
+          added.push(L.polyline(points, { color, weight, opacity: line ? 0.85 : 0.8 }).addTo(map));
+        }
       }
       polylinesRef.current = added;
-      if (added.length) map.fitBounds(L.featureGroup(added).getBounds(), { padding: [50, 50] });
+      if (line && added.length) map.fitBounds(L.featureGroup(added).getBounds(), { padding: [50, 50] });
     });
 
     return () => {
@@ -380,7 +395,7 @@ function RouteLayer({ line }: { line: LineInfo | null }) {
       polylinesRef.current.forEach((p) => p.remove());
       polylinesRef.current = [];
     };
-  }, [line, map]);
+  }, [line, visible, map]);
 
   return null;
 }
@@ -497,10 +512,19 @@ function LocateControl() {
 
 interface Props { vehicles: Vehicle[]; }
 
+function MapCapture({ onMap }: { onMap: (map: L.Map) => void }) {
+  const map = useMap();
+  useEffect(() => { onMap(map); }, [map]);
+  return null;
+}
+
 export function BusMap({ vehicles }: Props) {
+  const [map, setMap] = useState<L.Map | null>(null);
   const [operators, setOperators] = useState<Operator[]>([]);
   const [lines, setLines] = useState<LineInfo[]>([]);
   const [selectedLine, setSelectedLine] = useState<LineInfo | null>(null);
+  const [showVehicles, setShowVehicles] = useState(true);
+  const [showRoutes, setShowRoutes] = useState(true);
   const selectedLineRef = useRef<LineInfo | null>(null);
   selectedLineRef.current = selectedLine;
 
@@ -513,18 +537,52 @@ export function BusMap({ vehicles }: Props) {
         />
         <SaveMapPosition />
         <LinesFromViewportLayer onLinesChange={setLines} selectedLineRef={selectedLineRef} />
-        <SearchControl lines={lines} onLineSelect={setSelectedLine} />
         <MapClickDeselect onDeselect={() => setSelectedLine(null)} />
         <BusMarkersLayer
           vehicles={vehicles}
           onOperatorsChange={setOperators}
           onLineSelect={setSelectedLine}
           selectedLineId={selectedLine?.id ?? null}
+          visible={showVehicles}
         />
-        <RouteLayer line={selectedLine} />
+        <RouteLayer line={selectedLine} allLines={lines} visible={showRoutes} />
         <StopsLayer />
         <LocateControl />
+        <MapCapture onMap={setMap} />
       </MapContainer>
+      {map && (
+        <SearchControl map={map} lines={lines} onLineSelect={setSelectedLine} />
+      )}
+      <div style={{ position: "absolute", top: 10, right: 10, zIndex: 1000 }} className="map-controls">
+        <button
+          className={`map-toggle map-toggle--vehicles${showVehicles ? " map-toggle--on" : ""}`}
+          onClick={() => setShowVehicles((v) => !v)}
+          title={showVehicles ? "Hide vehicles" : "Show vehicles"}
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="1.5" y="4" width="13" height="7.5" rx="1.5" strokeWidth="1.4"/>
+            <rect x="3" y="2" width="10" height="3" rx="1" strokeWidth="1.2"/>
+            <line x1="1.5" y1="7.5" x2="14.5" y2="7.5" strokeWidth="1"/>
+            <rect x="3.5" y="4.8" width="2.8" height="2" rx="0.4" strokeWidth="1"/>
+            <rect x="9.7" y="4.8" width="2.8" height="2" rx="0.4" strokeWidth="1"/>
+            <circle cx="4.5" cy="13" r="1.3" strokeWidth="1.3"/>
+            <circle cx="11.5" cy="13" r="1.3" strokeWidth="1.3"/>
+          </svg>
+          Vehicles
+        </button>
+        <button
+          className={`map-toggle map-toggle--routes${showRoutes ? " map-toggle--on" : ""}`}
+          onClick={() => setShowRoutes((v) => !v)}
+          title={showRoutes ? "Hide routes" : "Show routes"}
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8">
+            <path d="M3 14 C3 14 3 9 8 8 C13 7 13 2 13 2"/>
+            <circle cx="3" cy="14" r="1.5" fill="currentColor" stroke="none"/>
+            <circle cx="13" cy="2" r="1.5" fill="currentColor" stroke="none"/>
+          </svg>
+          Routes
+        </button>
+      </div>
       <div style={{ position: "absolute", bottom: 30, right: 10, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8 }}>
         <LinesLegend lines={lines} selected={selectedLine} onSelect={setSelectedLine} />
       </div>

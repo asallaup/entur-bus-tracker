@@ -271,7 +271,7 @@ function departureTable(name: string, deps: Departure[]): string {
     .join("");
   return `<div class="stop-popup">
     <strong>${name}</strong>
-    <input type="text" class="dep-search" placeholder="Filter by line or destination…">
+    ${deps.length > 6 ? `<input type="text" class="dep-search" placeholder="Filter by line or destination…">` : ""}
     <table class="dep-table">
       <thead><tr><th>Line</th><th>Destination</th><th>Departs</th><th></th></tr></thead>
       <tbody>${rows}</tbody>

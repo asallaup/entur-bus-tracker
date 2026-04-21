@@ -271,6 +271,7 @@ function departureTable(name: string, deps: Departure[]): string {
     .join("");
   return `<div class="stop-popup">
     <strong>${name}</strong>
+    <input type="text" class="dep-search" placeholder="Filter by line or destination…">
     <table class="dep-table">
       <thead><tr><th>Line</th><th>Destination</th><th>Departs</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
@@ -536,6 +537,25 @@ export function StopsLayer() {
               const cell = expRow.querySelector(".dep-expansion-cell") as HTMLElement;
               const currentEl = expRow.querySelector(".dep-stop-row--current") as HTMLElement | null;
               if (cell && currentEl) cell.scrollTop = currentEl.offsetTop - cell.clientHeight / 2;
+            });
+          });
+        });
+
+        popup.on("contentupdate", () => {
+          const el = popup.getElement();
+          if (!el) return;
+          const input = el.querySelector<HTMLInputElement>(".dep-search");
+          if (!input) return;
+          input.addEventListener("keydown", (e) => e.stopPropagation());
+          input.addEventListener("input", () => {
+            const q = input.value.trim().toLowerCase();
+            el.querySelectorAll<HTMLTableRowElement>("tr[data-line]").forEach((row) => {
+              const line = (row.dataset.line ?? "").toLowerCase();
+              const dest = (row.querySelector(".dep-dest")?.textContent ?? "").toLowerCase();
+              const match = !q || line.includes(q) || dest.includes(q);
+              row.style.display = match ? "" : "none";
+              const next = row.nextElementSibling as HTMLElement | null;
+              if (next?.classList.contains("dep-expansion-row")) next.style.display = match ? "" : "none";
             });
           });
         });

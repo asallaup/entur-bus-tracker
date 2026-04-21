@@ -136,6 +136,7 @@ interface SearchResult {
   lat: number;
   lng: number;
   isStop: boolean;
+  lineInfo?: LineInfo;
 }
 
 async function searchPlaces(text: string): Promise<SearchResult[]> {
@@ -160,7 +161,7 @@ async function searchPlaces(text: string): Promise<SearchResult[]> {
   }
 }
 
-function SearchControl() {
+function SearchControl({ lines, onLineSelect }: { lines: LineInfo[]; onLineSelect: (line: LineInfo) => void }) {
   const map = useMap();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -173,15 +174,22 @@ function SearchControl() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!val.trim()) { setResults([]); setOpen(false); return; }
     debounceRef.current = setTimeout(async () => {
-      const res = await searchPlaces(val);
-      setResults(res);
-      setOpen(res.length > 0);
+      const q = val.trim().toLowerCase();
+      const lineResults: SearchResult[] = lines
+        .filter((l) => l.publicCode.toLowerCase().includes(q) || l.name.toLowerCase().includes(q))
+        .slice(0, 4)
+        .map((l) => ({ id: l.id, label: `${l.publicCode} – ${l.name}`, lat: 0, lng: 0, isStop: false, lineInfo: l }));
+      const stopResults = await searchPlaces(val);
+      const combined = [...lineResults, ...stopResults].slice(0, 8);
+      setResults(combined);
+      setOpen(combined.length > 0);
     }, 250);
   }
 
   function select(r: SearchResult) {
     setQuery(r.label);
     setOpen(false);
+    if (r.lineInfo) { onLineSelect(r.lineInfo); return; }
     map.flyTo([r.lat, r.lng], r.isStop ? 17 : 15, { duration: 1.2 });
   }
 
@@ -219,6 +227,7 @@ function SearchControl() {
           {results.map((r) => (
             <li key={r.id} className="search-result" onMouseDown={() => select(r)}>
               {r.isStop && <span className="search-stop-badge">Stop</span>}
+              {r.lineInfo && <span className="search-line-badge" style={{ background: r.lineInfo.color }}>{r.lineInfo.publicCode}</span>}
               {r.label}
             </li>
           ))}
@@ -464,7 +473,7 @@ export function BusMap({ vehicles }: Props) {
         />
         <SaveMapPosition />
         <LinesFromViewportLayer onLinesChange={setLines} selectedLineRef={selectedLineRef} />
-        <SearchControl />
+        <SearchControl lines={lines} onLineSelect={setSelectedLine} />
         <MapClickDeselect onDeselect={() => setSelectedLine(null)} />
         <BusMarkersLayer
           vehicles={vehicles}

@@ -572,3 +572,12 @@ html, body, #root {
   border-radius: 4px;
   flex-shrink: 0;
 }
+
+.search-line-badge {
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}

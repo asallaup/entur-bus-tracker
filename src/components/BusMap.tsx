@@ -145,6 +145,7 @@ async function searchPlaces(text: string): Promise<SearchResult[]> {
     url.searchParams.set("text", text);
     url.searchParams.set("lang", "no");
     url.searchParams.set("size", "8");
+    url.searchParams.set("layers", "venue");
     const res = await fetch(url.toString(), { headers: { "ET-Client-Name": "demo-busmap" } });
     const json = await res.json();
     return (json.features ?? []).map((f: any) => ({

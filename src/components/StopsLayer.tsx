@@ -270,12 +270,16 @@ function departureTable(name: string, deps: Departure[]): string {
     })
     .join("");
   return `<div class="stop-popup">
-    <strong>${name}</strong>
-    ${deps.length > 6 ? `<input type="text" class="dep-search" placeholder="Filter by line or destination…">` : ""}
-    <table class="dep-table">
-      <thead><tr><th>Line</th><th>Destination</th><th>Departs</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <div class="stop-popup-header">
+      <strong>${name}</strong>
+      ${deps.length > 6 ? `<input type="text" class="dep-search" placeholder="Filter by line or destination…">` : ""}
+    </div>
+    <div class="stop-popup-body">
+      <table class="dep-table">
+        <thead><tr><th>Line</th><th>Destination</th><th>Departs</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
   </div>`;
 }
 

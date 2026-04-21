@@ -1,6 +1,7 @@
 import L from "leaflet";
 import { useEffect, useRef } from "react";
 import { useMap } from "react-leaflet";
+import type { LineInfo } from "./BusMap";
 
 const MIN_ZOOM = 14;
 const LABEL_MIN_ZOOM = 16;
@@ -57,6 +58,38 @@ interface StopRouteData {
 }
 
 const stopRoutesCache = new Map<string, StopRouteData[]>();
+
+const LINE_STOPS_QUERY = `
+  query($id: ID!) {
+    line(id: $id) {
+      journeyPatterns {
+        quays { stopPlace { id } }
+      }
+    }
+  }
+`;
+
+const lineStopsCache = new Map<string, Set<string>>();
+
+async function fetchLineStops(lineId: string): Promise<Set<string>> {
+  if (lineStopsCache.has(lineId)) return lineStopsCache.get(lineId)!;
+  try {
+    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      body: JSON.stringify({ query: LINE_STOPS_QUERY, variables: { id: lineId } }),
+    });
+    const json = await res.json();
+    const ids = new Set<string>();
+    for (const p of json.data?.line?.journeyPatterns ?? [])
+      for (const q of p.quays ?? []) {
+        const id = q.stopPlace?.id;
+        if (id) ids.add(id);
+      }
+    if (ids.size > 0) lineStopsCache.set(lineId, ids);
+    return ids;
+  } catch { return new Set(); }
+}
 
 function decodePolyline(encoded: string): [number, number][] {
   const points: [number, number][] = [];
@@ -331,7 +364,7 @@ const stopIconHighlight = L.divIcon({
   iconAnchor: [11, 11],
 });
 
-export function StopsLayer({ visible, routesVisible }: { visible?: boolean; routesVisible?: boolean }) {
+export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?: boolean; routesVisible?: boolean; selectedLine?: LineInfo | null }) {
   const map = useMap();
   const markers = useRef<Map<string, L.Marker>>(new Map());
   const stopNames = useRef<Map<string, string>>(new Map());
@@ -345,14 +378,18 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
   visibleRef.current = visible !== false;
   const routesVisibleRef = useRef(routesVisible !== false);
   routesVisibleRef.current = routesVisible !== false;
+  const lineStopsRef = useRef<Set<string> | null>(null);
+
+  function applyMarkerVisibility(id: string, m: L.Marker) {
+    const filtered = lineStopsRef.current !== null && !lineStopsRef.current.has(id);
+    const show = visibleRef.current && !filtered;
+    m.setOpacity(show ? 1 : 0);
+    if (!show) m.closeTooltip();
+    else if (map.getZoom() >= LABEL_MIN_ZOOM) m.openTooltip();
+  }
 
   useEffect(() => {
-    const show = visible !== false;
-    for (const m of markers.current.values()) {
-      m.setOpacity(show ? 1 : 0);
-      if (!show) m.closeTooltip();
-      else if (map.getZoom() >= LABEL_MIN_ZOOM) m.openTooltip();
-    }
+    for (const [id, m] of markers.current) applyMarkerVisibility(id, m);
   }, [visible]);
 
   useEffect(() => {
@@ -361,6 +398,18 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
       if (show) p.addTo(map); else p.remove();
     }
   }, [routesVisible, map]);
+
+  useEffect(() => {
+    if (!selectedLine) {
+      lineStopsRef.current = null;
+      for (const [id, m] of markers.current) applyMarkerVisibility(id, m);
+      return;
+    }
+    fetchLineStops(selectedLine.id).then((ids) => {
+      lineStopsRef.current = ids.size > 0 ? ids : null;
+      for (const [id, m] of markers.current) applyMarkerVisibility(id, m);
+    });
+  }, [selectedLine]);
 
   function applyHighlight(stopId: string) {
     if (highlightedMarker.current) {
@@ -379,10 +428,7 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
   }
 
   function updateLabelVisibility() {
-    const show = map.getZoom() >= LABEL_MIN_ZOOM;
-    for (const m of markers.current.values()) {
-      if (show) m.openTooltip(); else m.closeTooltip();
-    }
+    for (const [id, m] of markers.current) applyMarkerVisibility(id, m);
   }
 
   function clearStopRoutes() {    stopPolylines.current.forEach((p) => p.remove());
@@ -407,8 +453,8 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
         stopNames.current.set(stop.id, stop.name);
         const icon = highlightedStopId.current === stop.id ? stopIconHighlight : stopIcon;
         const marker = L.marker([stop.latitude, stop.longitude], { icon, zIndexOffset: 500 }).addTo(map);
-        if (!visibleRef.current) marker.setOpacity(0);
         if (highlightedStopId.current === stop.id) highlightedMarker.current = marker;
+        applyMarkerVisibility(stop.id, marker);
 
         const popup = L.popup({
           closeButton: true,
@@ -424,6 +470,7 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
         const startHover = () => {
           if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
           isHovered = true;
+          if (!marker.isTooltipOpen()) marker.openTooltip();
           const name = stopNames.current.get(stop.id) ?? stop.name;
           const cached = stopRoutesCache.get(stop.id);
           if (cached) { marker.setTooltipContent(stopHoverContent(name, cached)); return; }
@@ -436,6 +483,7 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
           hoverTimer = setTimeout(() => {
             isHovered = false;
             marker.setTooltipContent(stopLabel(stopNames.current.get(stop.id) ?? stop.name));
+            if (map.getZoom() < LABEL_MIN_ZOOM) marker.closeTooltip();
           }, 80);
         };
 
@@ -471,7 +519,6 @@ export function StopsLayer({ visible, routesVisible }: { visible?: boolean; rout
           offset: [6, 0],
           className: "stop-label-tooltip",
         });
-        if (!visibleRef.current) marker.closeTooltip();
 
         marker.on("mouseover", startHover);
         marker.on("mouseout", endHover);

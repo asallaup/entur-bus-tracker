@@ -357,17 +357,17 @@ async function fetchRouteShapes(lineId: string): Promise<string[]> {
   }
 }
 
-function RouteLayer({ line, allLines, visible }: { line: LineInfo | null; allLines: LineInfo[]; visible?: boolean }) {
+function RouteLayer({ line, allLines, visible, onLineSelect }: { line: LineInfo | null; allLines: LineInfo[]; visible?: boolean; onLineSelect?: (line: LineInfo) => void }) {
   const map = useMap();
   const polylinesRef = useRef<L.Polyline[]>([]);
   const allLinesRef = useRef(allLines);
   allLinesRef.current = allLines;
+  const prevLineId = useRef<string | null>(null);
 
   useEffect(() => {
     polylinesRef.current.forEach((p) => p.remove());
     polylinesRef.current = [];
 
-    // Selected line always shows, regardless of Routes toggle
     const linesToDraw = line ? [line] : (visible !== false ? allLinesRef.current.slice(0, 30) : []);
     if (linesToDraw.length === 0) return;
 
@@ -376,18 +376,53 @@ function RouteLayer({ line, allLines, visible }: { line: LineInfo | null; allLin
     Promise.all(linesToDraw.map((l) => fetchRouteShapes(l.id))).then((shapesArray) => {
       if (cancelled) return;
       const added: L.Polyline[] = [];
+      const elemToLine = new Map<Element, LineInfo>();
+      let labelPlaced = false;
       for (let i = 0; i < linesToDraw.length; i++) {
         const shapes = shapesArray[i];
-        const color = line ? "#e63946" : linesToDraw[i].color;
+        const lineInfo = linesToDraw[i];
+        const color = lineInfo.color;
         const weight = line ? 5 : 4;
         for (const encoded of shapes) {
           const points = decodePolyline(encoded);
           if (points.length < 2) continue;
-          added.push(L.polyline(points, { color, weight, opacity: line ? 0.85 : 0.8 }).addTo(map));
+          const pl = L.polyline(points, { color, weight, opacity: line ? 0.85 : 0.8 }).addTo(map);
+          const svgEl = pl.getElement();
+          if (svgEl) elemToLine.set(svgEl, lineInfo);
+          if (line && !labelPlaced) {
+            pl.bindTooltip(
+              `<div class="veh-popup"><div class="veh-head"><span class="dep-badge" style="background:${lineInfo.color}">${lineInfo.publicCode}</span><span class="veh-route">${lineInfo.name}</span></div></div>`,
+              { permanent: true, className: "veh-tooltip", direction: "center" }
+            );
+            labelPlaced = true;
+          } else if (!line) {
+            pl.bindTooltip("", { sticky: true, className: "veh-tooltip" });
+            pl.on("mouseover", (e: L.LeafletMouseEvent) => {
+              pl.bringToFront();
+              pl.setStyle({ weight: 6, opacity: 1 });
+              const overlapping: LineInfo[] = [];
+              const seen = new Set<string>();
+              for (const el of document.elementsFromPoint(e.originalEvent.clientX, e.originalEvent.clientY)) {
+                const li = elemToLine.get(el);
+                if (li && !seen.has(li.id)) { overlapping.push(li); seen.add(li.id); }
+              }
+              if (!overlapping.length) overlapping.push(lineInfo);
+              pl.setTooltipContent(
+                `<div class="veh-popup">${overlapping.map((li) =>
+                  `<div class="veh-head"><span class="dep-badge" style="background:${li.color}">${li.publicCode}</span><span class="veh-route">${li.name}</span></div>`
+                ).join("")}</div>`
+              );
+            });
+            pl.on("mouseout", () => pl.setStyle({ weight: 4, opacity: 0.8 }));
+            pl.on("click", (e) => { L.DomEvent.stopPropagation(e); onLineSelect?.(lineInfo); });
+          }
+          added.push(pl);
         }
       }
       polylinesRef.current = added;
-      if (line && added.length) map.fitBounds(L.featureGroup(added).getBounds(), { padding: [50, 50] });
+      const lineChanged = line?.id !== prevLineId.current;
+      prevLineId.current = line?.id ?? null;
+      if (line && added.length && lineChanged) map.fitBounds(L.featureGroup(added).getBounds(), { padding: [50, 50] });
     });
 
     return () => {
@@ -395,7 +430,7 @@ function RouteLayer({ line, allLines, visible }: { line: LineInfo | null; allLin
       polylinesRef.current.forEach((p) => p.remove());
       polylinesRef.current = [];
     };
-  }, [line, visible, map]);
+  }, [line, visible, allLines, map]);
 
   return null;
 }
@@ -545,8 +580,8 @@ export function BusMap({ vehicles }: Props) {
           selectedLineId={selectedLine?.id ?? null}
           visible={showVehicles}
         />
-        <RouteLayer line={selectedLine} allLines={lines} visible={showRoutes} />
-        <StopsLayer />
+        <RouteLayer line={selectedLine} allLines={lines} visible={showRoutes} onLineSelect={setSelectedLine} />
+        <StopsLayer selectedLine={selectedLine} />
         <LocateControl />
         <MapCapture onMap={setMap} />
       </MapContainer>

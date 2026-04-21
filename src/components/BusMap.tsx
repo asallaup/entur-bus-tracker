@@ -1,0 +1,483 @@
+import L from "leaflet";
+import React, { useEffect, useRef, useState } from "react";
+import { MapContainer, TileLayer, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import { BusMarkersLayer } from "./BusMarker";
+import { StopsLayer } from "./StopsLayer";
+import type { Vehicle } from "../hooks/useBusPositions";
+
+const OPERATOR_COLORS = [
+  "#e63946", "#2a9d8f", "#f4a261", "#6a4c93",
+  "#1982c4", "#8ac926", "#ff924c", "#3a86ff",
+  "#c77dff", "#06d6a0",
+];
+
+function operatorColor(operatorId: string | null | undefined): string {
+  if (!operatorId) return "#888";
+  let hash = 0;
+  for (let i = 0; i < operatorId.length; i++) hash = (hash * 31 + operatorId.charCodeAt(i)) >>> 0;
+  return OPERATOR_COLORS[hash % OPERATOR_COLORS.length];
+}
+
+export interface Operator { id: string; name: string; color: string; }
+export interface LineInfo  { id: string; publicCode: string; name: string; color: string; }
+
+// --- Encoded polyline decoder --------------------------------------------
+
+function decodePolyline(encoded: string): [number, number][] {
+  const points: [number, number][] = [];
+  let idx = 0, lat = 0, lng = 0;
+  while (idx < encoded.length) {
+    let b: number, shift = 0, val = 0;
+    do { b = encoded.charCodeAt(idx++) - 63; val |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += val & 1 ? ~(val >> 1) : val >> 1;
+    shift = 0; val = 0;
+    do { b = encoded.charCodeAt(idx++) - 63; val |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += val & 1 ? ~(val >> 1) : val >> 1;
+    points.push([lat / 1e5, lng / 1e5]);
+  }
+  return points;
+}
+
+// --- Lines by viewport ---------------------------------------------------
+
+const LINES_BBOX_QUERY = `
+  query($minLat:Float!,$minLon:Float!,$maxLat:Float!,$maxLon:Float!) {
+    stopPlacesByBbox(
+      minimumLatitude:$minLat, minimumLongitude:$minLon,
+      maximumLatitude:$maxLat, maximumLongitude:$maxLon
+    ) {
+      quays {
+        lines {
+          id publicCode name transportMode
+          operator { id name }
+        }
+      }
+    }
+  }
+`;
+
+async function fetchLinesByBbox(
+  minLat: number, minLon: number,
+  maxLat: number, maxLon: number
+): Promise<LineInfo[]> {
+  try {
+    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      body: JSON.stringify({ query: LINES_BBOX_QUERY, variables: { minLat, minLon, maxLat, maxLon } }),
+    });
+    const json = await res.json();
+    const stops: Array<{ quays: Array<{ lines: Array<{ id: string; publicCode: string | null; name: string | null; transportMode: string | null; operator: { id: string; name: string } | null }> }> }> =
+      json.data?.stopPlacesByBbox ?? [];
+    const lineMap = new Map<string, LineInfo>();
+    for (const stop of stops) {
+      for (const quay of stop.quays ?? []) {
+        for (const line of quay.lines ?? []) {
+          if (!line.publicCode || (line.transportMode !== "bus" && line.transportMode !== "tram")) continue;
+          lineMap.set(line.id, {
+            id: line.id,
+            publicCode: line.publicCode,
+            name: line.name ?? line.publicCode,
+            color: operatorColor(line.operator?.id),
+          });
+        }
+      }
+    }
+    return [...lineMap.values()];
+  } catch {
+    return [];
+  }
+}
+
+function LinesFromViewportLayer({
+  onLinesChange,
+  selectedLineRef,
+}: {
+  onLinesChange: (lines: LineInfo[]) => void;
+  selectedLineRef: React.RefObject<LineInfo | null>;
+}) {
+  const map = useMap();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function refresh() {
+    const b = map.getBounds();
+    fetchLinesByBbox(b.getSouth(), b.getWest(), b.getNorth(), b.getEast()).then((incoming) => {
+      const sel = selectedLineRef.current;
+      if (sel && !incoming.some((l) => l.id === sel.id)) {
+        onLinesChange([sel, ...incoming]);
+      } else {
+        onLinesChange(incoming);
+      }
+    });
+  }
+
+  useEffect(() => {
+    function onMove() {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(refresh, 400);
+    }
+    map.on("moveend zoomend", onMove);
+    refresh();
+    return () => {
+      map.off("moveend zoomend", onMove);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [map]);
+
+  return null;
+}
+
+// --- Search control -------------------------------------------------------
+
+interface SearchResult {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  isStop: boolean;
+}
+
+async function searchPlaces(text: string): Promise<SearchResult[]> {
+  if (!text.trim()) return [];
+  try {
+    const url = new URL("https://api.entur.io/geocoder/v1/autocomplete");
+    url.searchParams.set("text", text);
+    url.searchParams.set("lang", "no");
+    url.searchParams.set("size", "8");
+    const res = await fetch(url.toString(), { headers: { "ET-Client-Name": "demo-busmap" } });
+    const json = await res.json();
+    return (json.features ?? []).map((f: any) => ({
+      id: f.properties.id,
+      label: f.properties.label ?? f.properties.name,
+      lat: f.geometry.coordinates[1],
+      lng: f.geometry.coordinates[0],
+      isStop: !!f.properties.id?.startsWith("NSR:StopPlace:"),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function SearchControl() {
+  const map = useMap();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleInput(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value;
+    setQuery(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!val.trim()) { setResults([]); setOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      const res = await searchPlaces(val);
+      setResults(res);
+      setOpen(res.length > 0);
+    }, 250);
+  }
+
+  function select(r: SearchResult) {
+    setQuery(r.label);
+    setOpen(false);
+    map.flyTo([r.lat, r.lng], r.isStop ? 17 : 15, { duration: 1.2 });
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") { setOpen(false); (e.target as HTMLElement).blur(); }
+    if (e.key === "Enter" && results.length > 0) select(results[0]);
+  }
+
+  return (
+    <div
+      className="search-control"
+      onMouseDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+    >
+      <input
+        type="text"
+        className="search-input"
+        placeholder="Search location or stop…"
+        value={query}
+        onChange={handleInput}
+        onFocus={() => results.length > 0 && setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={handleKeyDown}
+      />
+      {query && (
+        <button
+          className="search-clear"
+          onMouseDown={(e) => { e.preventDefault(); setQuery(""); setResults([]); setOpen(false); }}
+          tabIndex={-1}
+          aria-label="Clear search"
+        >×</button>
+      )}
+      {open && (
+        <ul className="search-results">
+          {results.map((r) => (
+            <li key={r.id} className="search-result" onMouseDown={() => select(r)}>
+              {r.isStop && <span className="search-stop-badge">Stop</span>}
+              {r.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// --- Persistent map position ---------------------------------------------
+
+function getSavedPos(): { center: [number, number]; zoom: number } {
+  try {
+    const raw = localStorage.getItem("mapPos");
+    if (raw) {
+      const { lat, lng, z } = JSON.parse(raw);
+      if (typeof lat === "number" && typeof lng === "number" && typeof z === "number")
+        return { center: [lat, lng], zoom: z };
+    }
+  } catch {}
+  return { center: [59.91, 10.75], zoom: 12 };
+}
+
+const INITIAL_POS = getSavedPos();
+
+function SaveMapPosition() {
+  const map = useMap();
+  useEffect(() => {
+    const save = () => {
+      const c = map.getCenter();
+      localStorage.setItem("mapPos", JSON.stringify({ lat: c.lat, lng: c.lng, z: map.getZoom() }));
+    };
+    map.on("moveend zoomend", save);
+    return () => { map.off("moveend zoomend", save); };
+  }, [map]);
+  return null;
+}
+
+// --- Route layer ---------------------------------------------------------
+
+function MapClickDeselect({ onDeselect }: { onDeselect: () => void }) {
+  const map = useMap();
+  const cb = useRef(onDeselect);
+  cb.current = onDeselect;
+  useEffect(() => {
+    const handler = () => cb.current();
+    map.on("click", handler);
+    return () => { map.off("click", handler); };
+  }, [map]);
+  return null;
+}
+
+const ROUTE_QUERY = `
+  query($id: ID!) {
+    line(id: $id) {
+      journeyPatterns { pointsOnLink { points } }
+    }
+  }
+`;
+
+const routeCache = new Map<string, string[]>(); // lineId → encoded polylines
+
+async function fetchRouteShapes(lineId: string): Promise<string[]> {
+  if (routeCache.has(lineId)) return routeCache.get(lineId)!;
+  try {
+    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      body: JSON.stringify({ query: ROUTE_QUERY, variables: { id: lineId } }),
+    });
+    const json = await res.json();
+    const patterns: Array<{ pointsOnLink: { points: string } }> =
+      json.data?.line?.journeyPatterns ?? [];
+    const seen = new Set<string>();
+    const shapes = patterns
+      .map((p) => p.pointsOnLink?.points)
+      .filter((p): p is string => !!p && !seen.has(p) && !!seen.add(p));
+    routeCache.set(lineId, shapes);
+    return shapes;
+  } catch {
+    return [];
+  }
+}
+
+function RouteLayer({ line }: { line: LineInfo | null }) {
+  const map = useMap();
+  const polylinesRef = useRef<L.Polyline[]>([]);
+
+  useEffect(() => {
+    polylinesRef.current.forEach((p) => p.remove());
+    polylinesRef.current = [];
+    if (!line) return;
+
+    let cancelled = false;
+
+    fetchRouteShapes(line.id).then((shapes) => {
+      if (cancelled) return;
+      const added: L.Polyline[] = [];
+      for (const encoded of shapes) {
+        const points = decodePolyline(encoded);
+        if (points.length < 2) continue;
+        added.push(L.polyline(points, { color: "#e63946", weight: 5, opacity: 0.85 }).addTo(map));
+      }
+      polylinesRef.current = added;
+      if (added.length) map.fitBounds(L.featureGroup(added).getBounds(), { padding: [50, 50] });
+    });
+
+    return () => {
+      cancelled = true;
+      polylinesRef.current.forEach((p) => p.remove());
+      polylinesRef.current = [];
+    };
+  }, [line, map]);
+
+  return null;
+}
+
+// --- Legends -------------------------------------------------------------
+
+function OperatorLegend({ operators }: { operators: Operator[] }) {
+  if (operators.length === 0) return null;
+  const seen = new Set<string>();
+  const unique = [...operators]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .filter((op) => { if (seen.has(op.name)) return false; seen.add(op.name); return true; });
+  return (
+    <div className="map-legend" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+      <div className="legend-title">Operators</div>
+      {unique.map((op) => (
+        <div key={op.id} className="legend-item">
+          <span className="legend-dot" style={{ background: op.color }} />
+          <span className="legend-name">{op.name}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface LinesLegendProps {
+  lines: LineInfo[];
+  selected: LineInfo | null;
+  onSelect: (line: LineInfo | null) => void;
+}
+
+function LinesLegend({ lines, selected, onSelect }: LinesLegendProps) {
+  const [open, setOpen] = React.useState(false);
+  if (lines.length === 0) return null;
+  const sorted = [...lines].sort((a, b) =>
+    a.publicCode.localeCompare(b.publicCode, undefined, { numeric: true })
+  );
+  return (
+    <div className="map-legend" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+      <div className="legend-title legend-title--toggle" onClick={() => setOpen((o) => !o)}>
+        Lines <span className="legend-chevron">{open ? "▲" : "▼"}</span>
+      </div>
+      {open && sorted.map((line) => {
+        const isSelected = selected?.id === line.id;
+        return (
+          <div
+            key={line.id}
+            className={`legend-item legend-item--clickable${isSelected ? " legend-item--selected" : ""}`}
+            onClick={() => onSelect(isSelected ? null : line)}
+          >
+            <span className="legend-badge" style={{ background: line.color }}>{line.publicCode}</span>
+            <span className="legend-name">{line.name}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// --- Locate control ------------------------------------------------------
+
+const userIcon = L.divIcon({
+  className: "",
+  html: `<div class="user-dot"></div>`,
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
+
+type LocateState = "idle" | "loading" | "error";
+
+function LocateControl() {
+  const map = useMap();
+  const markerRef = useRef<L.Marker | null>(null);
+  const [state, setState] = useState<LocateState>("idle");
+
+  useEffect(() => { return () => { markerRef.current?.remove(); }; }, []);
+
+  function locate() {
+    if (!navigator.geolocation) { setState("error"); return; }
+    setState("loading");
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setState("idle");
+        map.flyTo([coords.latitude, coords.longitude], 15, { duration: 1.2 });
+        if (markerRef.current) {
+          markerRef.current.setLatLng([coords.latitude, coords.longitude]);
+        } else {
+          markerRef.current = L.marker([coords.latitude, coords.longitude], { icon: userIcon })
+            .bindTooltip("Your location", { direction: "top", offset: [0, -10] })
+            .addTo(map);
+        }
+      },
+      (err) => {
+        setState("error");
+        if (err.code === err.PERMISSION_DENIED)
+          alert("Location access was denied.\n\nTo fix: click the lock icon in the address bar, set Location to Allow, then reload the page.");
+      }
+    );
+  }
+
+  return (
+    <button
+      className={`locate-btn${state === "error" ? " locate-btn--error" : ""}`}
+      onClick={locate}
+      disabled={state === "loading"}
+      title={state === "loading" ? "Locating…" : state === "error" ? "Location unavailable" : "Go to my location"}
+    >
+      {state === "loading" ? "…" : "⊕"}
+    </button>
+  );
+}
+
+// --- BusMap --------------------------------------------------------------
+
+interface Props { vehicles: Vehicle[]; }
+
+export function BusMap({ vehicles }: Props) {
+  const [operators, setOperators] = useState<Operator[]>([]);
+  const [lines, setLines] = useState<LineInfo[]>([]);
+  const [selectedLine, setSelectedLine] = useState<LineInfo | null>(null);
+  const selectedLineRef = useRef<LineInfo | null>(null);
+  selectedLineRef.current = selectedLine;
+
+  return (
+    <div style={{ position: "relative", height: "100%", width: "100%" }}>
+      <MapContainer center={INITIAL_POS.center} zoom={INITIAL_POS.zoom} style={{ height: "100%", width: "100%" }}>
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <SaveMapPosition />
+        <LinesFromViewportLayer onLinesChange={setLines} selectedLineRef={selectedLineRef} />
+        <SearchControl />
+        <MapClickDeselect onDeselect={() => setSelectedLine(null)} />
+        <BusMarkersLayer
+          vehicles={vehicles}
+          onOperatorsChange={setOperators}
+          onLineSelect={setSelectedLine}
+          selectedLineId={selectedLine?.id ?? null}
+        />
+        <RouteLayer line={selectedLine} />
+        <StopsLayer />
+        <LocateControl />
+      </MapContainer>
+      <div style={{ position: "absolute", bottom: 30, right: 10, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8 }}>
+        <LinesLegend lines={lines} selected={selectedLine} onSelect={setSelectedLine} />
+      </div>
+    </div>
+  );
+}

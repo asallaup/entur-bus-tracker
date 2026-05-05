@@ -74,9 +74,9 @@ const lineStopsCache = new Map<string, Set<string>>();
 async function fetchLineStops(lineId: string): Promise<Set<string>> {
   if (lineStopsCache.has(lineId)) return lineStopsCache.get(lineId)!;
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: LINE_STOPS_QUERY, variables: { id: lineId } }),
     });
     const json = await res.json();
@@ -109,9 +109,9 @@ function decodePolyline(encoded: string): [number, number][] {
 async function fetchStopRoutes(stopId: string): Promise<StopRouteData[]> {
   if (stopRoutesCache.has(stopId)) return stopRoutesCache.get(stopId)!;
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: STOP_ROUTES_QUERY, variables: { id: stopId } }),
     });
     const json = await res.json();
@@ -171,9 +171,9 @@ const journeyStopsCache = new Map<string, StopCall[]>();
 
 async function fetchJourneyStops(journeyId: string): Promise<StopCall[]> {
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: JOURNEY_STOPS_QUERY, variables: { id: journeyId } }),
     });
     const json = await res.json();
@@ -200,9 +200,9 @@ async function fetchDepartures(stopId: string): Promise<Departure[]> {
   const cached = departureCache.get(stopId);
   if (cached && Date.now() - cached.at < DEPARTURE_CACHE_TTL) return cached.data;
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: DEPARTURES_QUERY, variables: { id: stopId } }),
     });
     const json = await res.json();
@@ -333,9 +333,9 @@ async function fetchStops(
   maxLat: number, maxLon: number
 ): Promise<StopPlace[]> {
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query: STOPS_QUERY,
         variables: { minLat, minLon, maxLat, maxLon },

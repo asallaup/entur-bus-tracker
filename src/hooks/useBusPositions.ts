@@ -8,41 +8,10 @@ export interface Vehicle {
   lastUpdated: string | null;
 }
 
-const BUS_QUERY = `{
-  vehicles(mode: BUS) {
-    vehicleId
-    line { lineRef lineName }
-    location { latitude longitude }
-    delay
-    lastUpdated
-  }
-}`;
-
-const TRAM_QUERY = `{
-  vehicles(mode: TRAM) {
-    vehicleId
-    line { lineRef lineName }
-    location { latitude longitude }
-    delay
-    lastUpdated
-  }
-}`;
-
 async function fetchVehicles(): Promise<Vehicle[]> {
-  const [busRes, tramRes] = await Promise.all([
-    fetch("https://api.entur.io/realtime/v2/vehicles/graphql", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
-      body: JSON.stringify({ query: BUS_QUERY }),
-    }),
-    fetch("https://api.entur.io/realtime/v2/vehicles/graphql", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
-      body: JSON.stringify({ query: TRAM_QUERY }),
-    }),
-  ]);
-  const [busJson, tramJson] = await Promise.all([busRes.json(), tramRes.json()]);
-  return [...(busJson.data?.vehicles ?? []), ...(tramJson.data?.vehicles ?? [])];
+  const res = await fetch("/api/vehicles");
+  const json = await res.json();
+  return json.vehicles ?? [];
 }
 
 export function useBusPositions() {
@@ -55,7 +24,7 @@ export function useBusPositions() {
   async function load() {
     try {
       const data = await fetchVehicles();
-      setVehicles(data.filter((v) => v.location !== null));
+      setVehicles(data);
       setLastUpdated(new Date());
       setError(null);
     } catch (e) {

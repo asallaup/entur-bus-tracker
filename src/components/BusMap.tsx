@@ -62,9 +62,9 @@ async function fetchLinesByBbox(
   maxLat: number, maxLon: number
 ): Promise<LineInfo[]> {
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: LINES_BBOX_QUERY, variables: { minLat, minLon, maxLat, maxLon } }),
     });
     const json = await res.json();
@@ -151,9 +151,9 @@ const LINE_SEARCH_QUERY = `
 async function searchLines(publicCode: string): Promise<LineInfo[]> {
   if (!publicCode.trim()) return [];
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: LINE_SEARCH_QUERY, variables: { publicCode } }),
     });
     const json = await res.json();
@@ -173,12 +173,12 @@ async function searchLines(publicCode: string): Promise<LineInfo[]> {
 async function searchPlaces(text: string): Promise<SearchResult[]> {
   if (!text.trim()) return [];
   try {
-    const url = new URL("https://api.entur.io/geocoder/v1/autocomplete");
+    const url = new URL("/api/geocoder/autocomplete", location.origin);
     url.searchParams.set("text", text);
     url.searchParams.set("lang", "no");
     url.searchParams.set("size", "8");
     url.searchParams.set("layers", "venue");
-    const res = await fetch(url.toString(), { headers: { "ET-Client-Name": "demo-busmap" } });
+    const res = await fetch(url.toString());
     const json = await res.json();
     return (json.features ?? []).map((f: any) => ({
       id: f.properties.id,
@@ -338,9 +338,9 @@ const routeCache = new Map<string, string[]>(); // lineId → encoded polylines
 async function fetchRouteShapes(lineId: string): Promise<string[]> {
   if (routeCache.has(lineId)) return routeCache.get(lineId)!;
   try {
-    const res = await fetch("https://api.entur.io/journey-planner/v3/graphql", {
+    const res = await fetch("/api/journey", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ET-Client-Name": "demo-busmap" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: ROUTE_QUERY, variables: { id: lineId } }),
     });
     const json = await res.json();

@@ -4,8 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "concurrently -k \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "npm run dev --prefix server",
+    "build": "tsc && vite build && npm run build --prefix server",
+    "start": "NODE_ENV=production node server/dist/index.js",
+    "postinstall": "npm install --prefix server",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,6 +19,7 @@
     "react-leaflet": "^4.2.1"
   },
   "devDependencies": {
+    "concurrently": "^9.0.0",
     "@types/leaflet": "^1.9.14",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

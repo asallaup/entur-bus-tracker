@@ -5,6 +5,7 @@ import "leaflet/dist/leaflet.css";
 import { BusMarkersLayer } from "./BusMarker";
 import { StopsLayer } from "./StopsLayer";
 import { FavsPanel } from "./FavsPanel";
+import { isFavLine, toggleFavLine, subscribeFavLines, unsubscribeFavLines, getFavLines } from "../utils/favLines";
 import type { Vehicle } from "../hooks/useBusPositions";
 
 const OPERATOR_COLORS = [
@@ -465,10 +466,20 @@ interface LinesLegendProps {
 
 function LinesLegend({ lines, selected, onSelect }: LinesLegendProps) {
   const [open, setOpen] = React.useState(false);
+  const [, setFavTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const update = () => setFavTick((t) => t + 1);
+    subscribeFavLines(update);
+    return () => unsubscribeFavLines(update);
+  }, []);
+
   if (lines.length === 0) return null;
-  const sorted = [...lines].sort((a, b) =>
-    a.publicCode.localeCompare(b.publicCode, undefined, { numeric: true })
-  );
+  const sorted = [...lines].sort((a, b) => {
+    const favDiff = (isFavLine(b.id) ? 1 : 0) - (isFavLine(a.id) ? 1 : 0);
+    if (favDiff !== 0) return favDiff;
+    return a.publicCode.localeCompare(b.publicCode, undefined, { numeric: true });
+  });
   return (
     <div className="map-legend" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
       <div className="legend-title legend-title--toggle" onClick={() => setOpen((o) => !o)}>
@@ -476,6 +487,7 @@ function LinesLegend({ lines, selected, onSelect }: LinesLegendProps) {
       </div>
       {open && sorted.map((line) => {
         const isSelected = selected?.id === line.id;
+        const isFav = isFavLine(line.id);
         return (
           <div
             key={line.id}
@@ -484,6 +496,11 @@ function LinesLegend({ lines, selected, onSelect }: LinesLegendProps) {
           >
             <span className="legend-badge" style={{ background: line.color }}>{line.publicCode}</span>
             <span className="legend-name">{line.name}</span>
+            <button
+              className={`line-fav-btn${isFav ? " line-fav-btn--active" : ""}`}
+              onClick={(e) => { e.stopPropagation(); toggleFavLine(line); }}
+              title={isFav ? "Remove from favourites" : "Add to favourites"}
+            >★</button>
           </div>
         );
       })}
@@ -564,6 +581,24 @@ export function BusMap({ vehicles }: Props) {
   const selectedLineRef = useRef<LineInfo | null>(null);
   selectedLineRef.current = selectedLine;
 
+  const viewportLinesRef = useRef<LineInfo[]>([]);
+
+  function handleLinesChange(incoming: LineInfo[]) {
+    viewportLinesRef.current = incoming;
+    const favs = getFavLines().filter((f) => !incoming.some((l) => l.id === f.id));
+    setLines([...favs, ...incoming]);
+  }
+
+  useEffect(() => {
+    const update = () => {
+      const incoming = viewportLinesRef.current;
+      const favs = getFavLines().filter((f) => !incoming.some((l) => l.id === f.id));
+      setLines([...favs, ...incoming]);
+    };
+    subscribeFavLines(update);
+    return () => unsubscribeFavLines(update);
+  }, []);
+
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       <MapContainer center={INITIAL_POS.center} zoom={INITIAL_POS.zoom} style={{ height: "100%", width: "100%" }}>
@@ -572,7 +607,7 @@ export function BusMap({ vehicles }: Props) {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <SaveMapPosition />
-        <LinesFromViewportLayer onLinesChange={setLines} selectedLineRef={selectedLineRef} />
+        <LinesFromViewportLayer onLinesChange={handleLinesChange} selectedLineRef={selectedLineRef} />
         <MapClickDeselect onDeselect={() => setSelectedLine(null)} />
         <BusMarkersLayer
           vehicles={vehicles}

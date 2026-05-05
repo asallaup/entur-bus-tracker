@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { BusMarkersLayer } from "./BusMarker";
 import { StopsLayer } from "./StopsLayer";
+import { FavsPanel } from "./FavsPanel";
 import type { Vehicle } from "../hooks/useBusPositions";
 
 const OPERATOR_COLORS = [
@@ -620,6 +621,9 @@ export function BusMap({ vehicles }: Props) {
       </div>
       <div style={{ position: "absolute", bottom: 30, right: 10, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8 }}>
         <LinesLegend lines={lines} selected={selectedLine} onSelect={setSelectedLine} />
+      </div>
+      <div style={{ position: "absolute", bottom: 30, left: 10, zIndex: 1000 }}>
+        {map && <FavsPanel map={map} />}
       </div>
     </div>
   );

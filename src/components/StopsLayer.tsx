@@ -72,17 +72,36 @@ const LINE_STOPS_QUERY = `
 const lineStopsCache = new Map<string, Set<string>>();
 
 const FAV_KEY = "favStops";
-const favStops: Set<string> = (() => {
+
+export interface FavStop { id: string; name: string; lat: number; lng: number; }
+
+type FavListener = () => void;
+const favListeners = new Set<FavListener>();
+export function subscribeFavs(cb: FavListener) { favListeners.add(cb); }
+export function unsubscribeFavs(cb: FavListener) { favListeners.delete(cb); }
+export function getFavStops(): FavStop[] { return [...favStops.values()]; }
+
+const favStops: Map<string, FavStop> = (() => {
   try {
     const raw = localStorage.getItem(FAV_KEY);
-    return raw ? new Set<string>(JSON.parse(raw)) : new Set();
-  } catch { return new Set(); }
+    if (!raw) return new Map();
+    const data = JSON.parse(raw);
+    const map = new Map<string, FavStop>();
+    for (const item of data) {
+      if (item?.id && item?.name) map.set(item.id, item as FavStop);
+    }
+    return map;
+  } catch { return new Map(); }
 })();
 
-function toggleFav(stopId: string) {
-  if (favStops.has(stopId)) favStops.delete(stopId);
-  else favStops.add(stopId);
-  localStorage.setItem(FAV_KEY, JSON.stringify([...favStops]));
+export function toggleFav(stopId: string, name?: string, lat?: number, lng?: number) {
+  if (favStops.has(stopId)) {
+    favStops.delete(stopId);
+  } else if (name !== undefined) {
+    favStops.set(stopId, { id: stopId, name, lat: lat ?? 0, lng: lng ?? 0 });
+  }
+  localStorage.setItem(FAV_KEY, JSON.stringify([...favStops.values()]));
+  favListeners.forEach((cb) => cb());
 }
 
 async function fetchLineStops(lineId: string): Promise<Set<string>> {
@@ -425,6 +444,16 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
   }, [visible]);
 
   useEffect(() => {
+    const update = () => {
+      for (const [id, m] of markers.current) {
+        if (highlightedStopId.current !== id) m.setIcon(getStopIcon(id, false));
+      }
+    };
+    subscribeFavs(update);
+    return () => unsubscribeFavs(update);
+  }, []);
+
+  useEffect(() => {
     const show = routesVisible !== false;
     for (const p of stopPolylines.current) {
       if (show) p.addTo(map); else p.remove();
@@ -567,13 +596,11 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
             const favBtn = target.closest("[data-fav-stop-id]") as HTMLElement | null;
             if (favBtn) {
               const sid = favBtn.dataset.favStopId!;
-              toggleFav(sid);
+              const stopName = stopNames.current.get(sid) ?? sid;
+              toggleFav(sid, stopName, stop.latitude, stop.longitude);
               const isActive = favStops.has(sid);
               favBtn.classList.toggle("fav-btn--active", isActive);
               favBtn.title = isActive ? "Remove from favourites" : "Add to favourites";
-              if (highlightedStopId.current !== sid) {
-                markers.current.get(sid)?.setIcon(getStopIcon(sid, false));
-              }
               return;
             }
 

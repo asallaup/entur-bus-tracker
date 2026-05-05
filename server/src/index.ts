@@ -8,6 +8,8 @@ import { geocoderRouter } from "./routes/geocoder.js";
 const app = express();
 app.use(express.json());
 
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
+
 app.use("/api/vehicles", vehicleRouter);
 app.use("/api/journey", journeyRouter);
 app.use("/api/geocoder", geocoderRouter);

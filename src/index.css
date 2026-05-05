@@ -711,6 +711,15 @@ html, body, #root {
   font-size: 12px;
 }
 
+.favs-stop-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #555;
+  flex-shrink: 0;
+}
+
 .favs-name {
   flex: 1;
   cursor: pointer;

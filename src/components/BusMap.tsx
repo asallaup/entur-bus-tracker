@@ -658,7 +658,7 @@ export function BusMap({ vehicles }: Props) {
         <LinesLegend lines={lines} selected={selectedLine} onSelect={setSelectedLine} />
       </div>
       <div style={{ position: "absolute", bottom: 30, left: 10, zIndex: 1000 }}>
-        {map && <FavsPanel map={map} />}
+        {map && <FavsPanel map={map} onLineSelect={setSelectedLine} />}
       </div>
     </div>
   );

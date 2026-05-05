@@ -2,17 +2,32 @@ import L from "leaflet";
 import { useEffect, useState } from "react";
 import { subscribeFavs, unsubscribeFavs, getFavStops, toggleFav } from "./StopsLayer";
 import type { FavStop } from "./StopsLayer";
+import { subscribeFavLines, unsubscribeFavLines, getFavLines, toggleFavLine } from "../utils/favLines";
+import type { FavLine } from "../utils/favLines";
+import type { LineInfo } from "./BusMap";
 
-export function FavsPanel({ map }: { map: L.Map }) {
-  const [favs, setFavs] = useState<FavStop[]>(getFavStops());
+interface Props {
+  map: L.Map;
+  onLineSelect: (line: LineInfo) => void;
+}
+
+export function FavsPanel({ map, onLineSelect }: Props) {
+  const [stops, setStops] = useState<FavStop[]>(getFavStops());
+  const [lines, setLines] = useState<FavLine[]>(getFavLines());
 
   useEffect(() => {
-    const update = () => setFavs(getFavStops());
+    const update = () => setStops(getFavStops());
     subscribeFavs(update);
     return () => unsubscribeFavs(update);
   }, []);
 
-  if (favs.length === 0) return null;
+  useEffect(() => {
+    const update = () => setLines(getFavLines());
+    subscribeFavLines(update);
+    return () => unsubscribeFavLines(update);
+  }, []);
+
+  if (stops.length === 0 && lines.length === 0) return null;
 
   return (
     <div
@@ -21,19 +36,28 @@ export function FavsPanel({ map }: { map: L.Map }) {
       onWheel={(e) => e.stopPropagation()}
     >
       <div className="favs-title">★ Favourites</div>
-      {favs.map((fav) => (
-        <div key={fav.id} className="favs-item">
-          <span
-            className="favs-name"
-            onClick={() => map.flyTo([fav.lat, fav.lng], 17, { duration: 1.2 })}
-          >
-            {fav.name}
+
+      {lines.map((line) => (
+        <div key={line.id} className="favs-item">
+          <span className="dep-badge" style={{ background: line.color, flexShrink: 0 }}>
+            {line.publicCode}
           </span>
-          <button
-            className="favs-remove"
-            onClick={() => toggleFav(fav.id)}
-            title="Remove from favourites"
-          >
+          <span className="favs-name" onClick={() => onLineSelect(line as LineInfo)}>
+            {line.name}
+          </span>
+          <button className="favs-remove" onClick={() => toggleFavLine(line)} title="Remove from favourites">
+            ✕
+          </button>
+        </div>
+      ))}
+
+      {stops.map((stop) => (
+        <div key={stop.id} className="favs-item">
+          <span className="favs-stop-dot" />
+          <span className="favs-name" onClick={() => map.flyTo([stop.lat, stop.lng], 17, { duration: 1.2 })}>
+            {stop.name}
+          </span>
+          <button className="favs-remove" onClick={() => toggleFav(stop.id)} title="Remove from favourites">
             ✕
           </button>
         </div>

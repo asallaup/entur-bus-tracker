@@ -2,6 +2,7 @@
 
 A real-time bus and tram tracker for Norway built with React and Leaflet. Vehicle positions update every 15 seconds using the public [Entur](https://entur.no) APIs — no API key required.
 
+
 ## Features
 
 - **Live vehicle positions** — buses and trams across Norway, refreshed every 15 s

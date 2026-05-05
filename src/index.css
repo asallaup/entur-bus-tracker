@@ -116,6 +116,15 @@ html, body, #root {
   50% { opacity: 0.2; }
 }
 
+.stop-dot--fav {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f4a261;
+  border: 3px solid #e76f51;
+  box-shadow: 0 0 0 2px rgba(244,162,97,0.35), 0 1px 4px rgba(0,0,0,0.3);
+}
+
 .stop-dot--hl {
   width: 22px;
   height: 22px;
@@ -262,13 +271,33 @@ html, body, #root {
   font-family: system-ui, sans-serif;
 }
 
-.stop-popup strong {
-  display: block;
+.stop-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 8px;
+}
+
+.stop-popup strong {
   font-size: 14px;
   font-weight: 700;
   color: #111;
 }
+
+.fav-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: #ddd;
+  padding: 0 2px;
+  flex-shrink: 0;
+  transition: color 0.15s, transform 0.15s;
+}
+
+.fav-btn:hover { color: #f4a261; transform: scale(1.2); }
+.fav-btn--active { color: #f4a261; }
 
 .stop-nodep {
   color: #888;

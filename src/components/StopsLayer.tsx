@@ -71,6 +71,20 @@ const LINE_STOPS_QUERY = `
 
 const lineStopsCache = new Map<string, Set<string>>();
 
+const FAV_KEY = "favStops";
+const favStops: Set<string> = (() => {
+  try {
+    const raw = localStorage.getItem(FAV_KEY);
+    return raw ? new Set<string>(JSON.parse(raw)) : new Set();
+  } catch { return new Set(); }
+})();
+
+function toggleFav(stopId: string) {
+  if (favStops.has(stopId)) favStops.delete(stopId);
+  else favStops.add(stopId);
+  localStorage.setItem(FAV_KEY, JSON.stringify([...favStops]));
+}
+
 async function fetchLineStops(lineId: string): Promise<Set<string>> {
   if (lineStopsCache.has(lineId)) return lineStopsCache.get(lineId)!;
   try {
@@ -278,9 +292,14 @@ function stopLabel(name: string): string {
   return `<span class="stop-label">${name}</span>`;
 }
 
-function departureTable(name: string, deps: Departure[]): string {
+function favButton(stopId: string): string {
+  const isFav = favStops.has(stopId);
+  return `<button class="fav-btn${isFav ? " fav-btn--active" : ""}" data-fav-stop-id="${stopId}" title="${isFav ? "Remove from favourites" : "Add to favourites"}">★</button>`;
+}
+
+function departureTable(stopId: string, name: string, deps: Departure[]): string {
   if (deps.length === 0) {
-    return `<div class="stop-popup"><strong>${name}</strong><p class="stop-nodep">No upcoming departures</p></div>`;
+    return `<div class="stop-popup"><div class="stop-popup-header"><strong>${name}</strong>${favButton(stopId)}</div><p class="stop-nodep">No upcoming departures</p></div>`;
   }
   const rows = deps
     .map((d) => {
@@ -303,7 +322,7 @@ function departureTable(name: string, deps: Departure[]): string {
     })
     .join("");
   return `<div class="stop-popup">
-    <strong>${name}</strong>
+    <div class="stop-popup-header"><strong>${name}</strong>${favButton(stopId)}</div>
     ${deps.length > 6 ? `<input type="text" class="dep-search" placeholder="Filter by line or destination…">` : ""}
     <table class="dep-table">
       <thead><tr><th>Line</th><th>Destination</th><th>Departs</th><th></th></tr></thead>
@@ -364,6 +383,19 @@ const stopIconHighlight = L.divIcon({
   iconAnchor: [11, 11],
 });
 
+const stopIconFav = L.divIcon({
+  className: "",
+  html: `<div class="stop-dot stop-dot--fav"></div>`,
+  iconSize: [18, 18],
+  iconAnchor: [9, 9],
+});
+
+function getStopIcon(stopId: string, isHighlighted: boolean): L.DivIcon {
+  if (isHighlighted) return stopIconHighlight;
+  if (favStops.has(stopId)) return stopIconFav;
+  return stopIcon;
+}
+
 export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?: boolean; routesVisible?: boolean; selectedLine?: LineInfo | null }) {
   const map = useMap();
   const markers = useRef<Map<string, L.Marker>>(new Map());
@@ -413,7 +445,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
 
   function applyHighlight(stopId: string) {
     if (highlightedMarker.current) {
-      highlightedMarker.current.setIcon(stopIcon);
+      highlightedMarker.current.setIcon(getStopIcon(highlightedStopId.current!, false));
       highlightedMarker.current = null;
     }
     if (highlightTimeout.current) { clearTimeout(highlightTimeout.current); highlightTimeout.current = null; }
@@ -421,7 +453,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
     const m = markers.current.get(stopId);
     if (m) { m.setIcon(stopIconHighlight); highlightedMarker.current = m; }
     highlightTimeout.current = setTimeout(() => {
-      if (highlightedMarker.current) { highlightedMarker.current.setIcon(stopIcon); highlightedMarker.current = null; }
+      if (highlightedMarker.current) { highlightedMarker.current.setIcon(getStopIcon(stopId, false)); highlightedMarker.current = null; }
       highlightedStopId.current = null;
       highlightTimeout.current = null;
     }, 5000);
@@ -451,7 +483,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
       for (const stop of stops) {
         if (markers.current.has(stop.id)) continue;
         stopNames.current.set(stop.id, stop.name);
-        const icon = highlightedStopId.current === stop.id ? stopIconHighlight : stopIcon;
+        const icon = getStopIcon(stop.id, highlightedStopId.current === stop.id);
         const marker = L.marker([stop.latitude, stop.longitude], { icon, zIndexOffset: 500 }).addTo(map);
         if (highlightedStopId.current === stop.id) highlightedMarker.current = marker;
         applyMarkerVisibility(stop.id, marker);
@@ -494,12 +526,12 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           popup.openOn(map);
           const cached = departureCache.get(stop.id);
           if (cached && Date.now() - cached.at < DEPARTURE_CACHE_TTL) {
-            popup.setContent(departureTable(name, filterDepartures(cached.data)));
+            popup.setContent(departureTable(stop.id, name, filterDepartures(cached.data)));
             return;
           }
-          popup.setContent(`<div class="stop-popup"><strong>${name}</strong><p class="stop-nodep">Loading…</p></div>`);
+          popup.setContent(`<div class="stop-popup"><div class="stop-popup-header"><strong>${name}</strong>${favButton(stop.id)}</div><p class="stop-nodep">Loading…</p></div>`);
           fetchDepartures(stop.id).then((deps) => {
-            if (popup.isOpen()) popup.setContent(departureTable(name, filterDepartures(deps)));
+            if (popup.isOpen()) popup.setContent(departureTable(stop.id, name, filterDepartures(deps)));
           });
         };
 
@@ -531,6 +563,19 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           L.DomEvent.disableClickPropagation(el);
           el.addEventListener("click", (e) => {
             const target = e.target as HTMLElement;
+
+            const favBtn = target.closest("[data-fav-stop-id]") as HTMLElement | null;
+            if (favBtn) {
+              const sid = favBtn.dataset.favStopId!;
+              toggleFav(sid);
+              const isActive = favStops.has(sid);
+              favBtn.classList.toggle("fav-btn--active", isActive);
+              favBtn.title = isActive ? "Remove from favourites" : "Add to favourites";
+              if (highlightedStopId.current !== sid) {
+                markers.current.get(sid)?.setIcon(getStopIcon(sid, false));
+              }
+              return;
+            }
 
             const stopRow = target.closest(".dep-stop-row--link") as HTMLElement | null;
             if (stopRow) {

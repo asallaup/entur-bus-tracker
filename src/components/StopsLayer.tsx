@@ -36,9 +36,11 @@ const STOP_ROUTES_QUERY = `
   query($id: String!) {
     stopPlace(id: $id) {
       quays {
+        id
         journeyPatterns {
           line { id publicCode transportMode }
           pointsOnLink { points }
+          quays { id stopPlace { name } }
         }
       }
     }
@@ -55,6 +57,7 @@ interface StopRouteData {
   lineId: string;
   publicCode: string;
   shapes: string[];
+  patterns: string[][]; // each entry = ordered future stop names for one journey pattern direction
 }
 
 const stopRoutesCache = new Map<string, StopRouteData[]>();
@@ -139,7 +142,7 @@ function decodePolyline(encoded: string): [number, number][] {
   return points;
 }
 
-async function fetchStopRoutes(stopId: string): Promise<StopRouteData[]> {
+async function fetchStopRoutes(stopId: string, stopName?: string): Promise<StopRouteData[]> {
   if (stopRoutesCache.has(stopId)) return stopRoutesCache.get(stopId)!;
   try {
     const res = await fetch("/api/journey", {
@@ -148,26 +151,40 @@ async function fetchStopRoutes(stopId: string): Promise<StopRouteData[]> {
       body: JSON.stringify({ query: STOP_ROUTES_QUERY, variables: { id: stopId } }),
     });
     const json = await res.json();
-    const quays: Array<{ journeyPatterns: Array<{ line: { id: string; publicCode: string | null; transportMode: string | null }; pointsOnLink: { points: string } | null }> }> =
+    const quays: Array<{ id: string; journeyPatterns: Array<{ line: { id: string; publicCode: string | null; transportMode: string | null }; pointsOnLink: { points: string } | null; quays: Array<{ id: string; stopPlace: { name: string } | null }> | null }> }> =
       json.data?.stopPlace?.quays ?? [];
 
-    const lineMap = new Map<string, { publicCode: string; shapes: Set<string> }>();
-    for (const quay of quays) {
-      for (const jp of quay.journeyPatterns ?? []) {
+    const lineMap = new Map<string, { publicCode: string; shapes: Set<string>; patternSet: Set<string>; patterns: string[][] }>();
+    for (const outerQuay of quays) {
+      for (const jp of outerQuay.journeyPatterns ?? []) {
         if (jp.line.transportMode !== "bus" && jp.line.transportMode !== "tram") continue;
-        const points = jp.pointsOnLink?.points;
-        if (!points) continue;
         if (!lineMap.has(jp.line.id)) {
-          lineMap.set(jp.line.id, { publicCode: jp.line.publicCode ?? jp.line.id, shapes: new Set() });
+          lineMap.set(jp.line.id, { publicCode: jp.line.publicCode ?? jp.line.id, shapes: new Set(), patternSet: new Set(), patterns: [] });
         }
-        lineMap.get(jp.line.id)!.shapes.add(points);
+        const entry = lineMap.get(jp.line.id)!;
+        const points = jp.pointsOnLink?.points;
+        if (points) entry.shapes.add(points);
+        const patternQuays = jp.quays ?? [];
+        const currentIdx = patternQuays.findIndex((q) => q.id === outerQuay.id);
+        const futureQuays = currentIdx >= 0 ? patternQuays.slice(currentIdx + 1) : patternQuays;
+        const stopNames = futureQuays
+          .map((q) => q.stopPlace?.name)
+          .filter((n): n is string => !!n)
+          .map((n) => n.toLowerCase());
+        // Deduplicate identical patterns (same quay can appear via multiple outer quay entries)
+        const key = stopNames.join("|");
+        if (stopNames.length > 0 && !entry.patternSet.has(key)) {
+          entry.patternSet.add(key);
+          entry.patterns.push(stopNames);
+        }
       }
     }
 
-    const result: StopRouteData[] = [...lineMap.entries()].map(([lineId, { publicCode, shapes }]) => ({
+    const result: StopRouteData[] = [...lineMap.entries()].map(([lineId, { publicCode, shapes, patterns }]) => ({
       lineId,
       publicCode,
       shapes: [...shapes],
+      patterns,
     }));
     stopRoutesCache.set(stopId, result);
     return result;
@@ -320,8 +337,19 @@ function departureTable(stopId: string, name: string, deps: Departure[]): string
   if (deps.length === 0) {
     return `<div class="stop-popup"><div class="stop-popup-header"><strong>${name}</strong>${favButton(stopId)}</div><p class="stop-nodep">No upcoming departures</p></div>`;
   }
-  const rows = deps
-    .map((d) => {
+
+  const groups = new Map<string, Departure[]>();
+  for (const dep of deps) {
+    const key = dep.destination || "?";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(dep);
+  }
+  const sortedGroups = [...groups.entries()].sort(
+    ([, a], [, b]) => a[0].expected.getTime() - b[0].expected.getTime()
+  );
+
+  const rows = sortedGroups.map(([destination, groupDeps]) => {
+    const depRows = groupDeps.map((d) => {
       const delayMin = Math.round(d.delaySecs / 60);
       const delayHtml =
         delayMin > 2
@@ -332,19 +360,19 @@ function departureTable(stopId: string, name: string, deps: Departure[]): string
       const mins = minutesUntil(d.expected);
       const minsClass = mins === "now" ? " dep-minutes--now" : "";
       const rt = d.realtime ? "" : `<span class="dep-noRT" title="No realtime data">~ </span>`;
-      return `<tr data-line="${d.line}" data-journey-id="${d.journeyId}" class="dep-row">
+      return `<tr data-line="${d.line}" data-dest="${d.destination}" data-journey-id="${d.journeyId}" class="dep-row">
         <td><span class="dep-badge" style="background:${lineColor(d.line)}">${d.line}</span></td>
-        <td class="dep-dest">${d.destination}</td>
         <td class="dep-time-cell">${rt}<span class="dep-minutes${minsClass}">${mins}</span> <span class="dep-clock">${formatTime(d.expected)}</span>${delayHtml}</td>
         <td class="dep-chevron">›</td>
       </tr>`;
-    })
-    .join("");
+    }).join("");
+    return `<tr class="dep-direction-row"><td colspan="3">→ ${destination}</td></tr>${depRows}`;
+  }).join("");
+
   return `<div class="stop-popup">
     <div class="stop-popup-header"><strong>${name}</strong>${favButton(stopId)}</div>
-    ${deps.length > 6 ? `<input type="text" class="dep-search" placeholder="Filter by line or destination…">` : ""}
+    <input type="text" class="dep-search" placeholder="Filter by line or destination…">
     <table class="dep-table">
-      <thead><tr><th>Line</th><th>Destination</th><th>Departs</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
@@ -535,7 +563,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           const name = stopNames.current.get(stop.id) ?? stop.name;
           const cached = stopRoutesCache.get(stop.id);
           if (cached) { marker.setTooltipContent(stopHoverContent(name, cached)); return; }
-          fetchStopRoutes(stop.id).then((routes) => {
+          fetchStopRoutes(stop.id, stopNames.current.get(stop.id) ?? stop.name).then((routes) => {
             if (isHovered) marker.setTooltipContent(stopHoverContent(name, routes));
           });
         };
@@ -553,6 +581,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           if (popup.isOpen()) { popup.close(); return; }
           popup.setLatLng([stop.latitude, stop.longitude]);
           popup.openOn(map);
+          if (!stopRoutesCache.has(stop.id)) fetchStopRoutes(stop.id, stopNames.current.get(stop.id) ?? stop.name);
           const cached = departureCache.get(stop.id);
           if (cached && Date.now() - cached.at < DEPARTURE_CACHE_TTL) {
             popup.setContent(departureTable(stop.id, name, filterDepartures(cached.data)));
@@ -626,7 +655,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
               if (!lineCode) return;
               clearStopRoutes();
               selectedStopId.current = stop.id;
-              fetchStopRoutes(stop.id).then((routes) => {
+              fetchStopRoutes(stop.id, stopNames.current.get(stop.id) ?? stop.name).then((routes) => {
                 if (selectedStopId.current !== stop.id) return;
                 const matching = routes.filter((r) => r.publicCode === lineCode);
                 if (!matching.length) return;
@@ -660,23 +689,25 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
             row.classList.add("dep-row--open");
             const expRow = document.createElement("tr");
             expRow.className = "dep-expansion-row";
-            expRow.innerHTML = `<td colspan="4" class="dep-expansion-cell"><span class="dep-expansion-loading">Loading…</span></td>`;
+            expRow.innerHTML = `<td colspan="3" class="dep-expansion-cell"><span class="dep-expansion-loading">Loading…</span></td>`;
             row.insertAdjacentElement("afterend", expRow);
             fetchJourneyStops(journeyId).then((allStops) => {
               if (!expRow.isConnected) return;
               const fromIdx = allStops.findIndex((s) => s.stopPlaceId === stop.id);
               if (!allStops.length) {
-                expRow.innerHTML = `<td colspan="4" class="dep-expansion-cell dep-expansion-loading">No data</td>`;
+                expRow.innerHTML = `<td colspan="3" class="dep-expansion-cell dep-expansion-loading">No data</td>`;
                 return;
               }
+              const q = el.querySelector<HTMLInputElement>(".dep-search")?.value.trim().toLowerCase() ?? "";
               const stopsHtml = allStops.map((s, i) => {
                 const cls = i < fromIdx ? " dep-stop-row--past" : i === fromIdx ? " dep-stop-row--current" : "";
-                return `<div class="dep-stop-row dep-stop-row--link${cls}" data-lat="${s.lat}" data-lng="${s.lng}" data-stop-id="${s.stopPlaceId}">
+                const matchCls = q && i > fromIdx && s.name.toLowerCase().startsWith(q) ? " dep-stop-row--match" : "";
+                return `<div class="dep-stop-row dep-stop-row--link${cls}${matchCls}" data-lat="${s.lat}" data-lng="${s.lng}" data-stop-id="${s.stopPlaceId}">
                   <span class="dep-stop-name">${s.name}</span>
                   <span class="dep-stop-time">${s.time}</span>
                 </div>`;
               }).join("");
-              expRow.innerHTML = `<td colspan="4" class="dep-expansion-cell">${stopsHtml}</td>`;
+              expRow.innerHTML = `<td colspan="3" class="dep-expansion-cell">${stopsHtml}</td>`;
               const cell = expRow.querySelector(".dep-expansion-cell") as HTMLElement;
               const currentEl = expRow.querySelector(".dep-stop-row--current") as HTMLElement | null;
               if (cell && currentEl) cell.scrollTop = currentEl.offsetTop - cell.clientHeight / 2;
@@ -692,13 +723,49 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           input.addEventListener("keydown", (e) => e.stopPropagation());
           input.addEventListener("input", () => {
             const q = input.value.trim().toLowerCase();
+            const routes = stopRoutesCache.get(stop.id) ?? [];
             el.querySelectorAll<HTMLTableRowElement>("tr[data-line]").forEach((row) => {
               const line = (row.dataset.line ?? "").toLowerCase();
-              const dest = (row.querySelector(".dep-dest")?.textContent ?? "").toLowerCase();
-              const match = !q || line.includes(q) || dest.includes(q);
+              const dest = (row.dataset.dest ?? "").toLowerCase();
+              const routeData = routes.find((r) => r.publicCode.toLowerCase() === line);
+              // Find patterns where the departure's destination appears — those match this departure's direction
+              const dirPatterns = (routeData?.patterns ?? []).filter(
+                (stops) => dest !== "" && stops.some((n) => n.includes(dest) || dest.includes(n))
+              );
+              const routeStops = dirPatterns.length > 0
+                ? dirPatterns.flat()
+                : (routeData?.patterns ?? []).flat();
+              const lineMatch = line.includes(q);
+              const destMatch = dest.includes(q);
+              const viaStop = q && !lineMatch && !destMatch ? routeStops.find((n) => n.startsWith(q)) : undefined;
+              const match = !q || lineMatch || destMatch || routeStops.some((n) => n.startsWith(q));
               row.style.display = match ? "" : "none";
               const next = row.nextElementSibling as HTMLElement | null;
               if (next?.classList.contains("dep-expansion-row")) next.style.display = match ? "" : "none";
+              // Show/remove via-stop indicator
+              let viaEl = row.querySelector<HTMLElement>(".dep-via");
+              if (viaStop) {
+                if (!viaEl) {
+                  viaEl = document.createElement("span");
+                  viaEl.className = "dep-via";
+                  row.querySelector(".dep-time-cell")?.appendChild(viaEl);
+                }
+                viaEl.textContent = `via ${viaStop.charAt(0).toUpperCase() + viaStop.slice(1)}`;
+              } else if (viaEl) {
+                viaEl.remove();
+              }
+            });
+            el.querySelectorAll<HTMLElement>("tr.dep-direction-row").forEach((dirRow) => {
+              let sibling = dirRow.nextElementSibling as HTMLElement | null;
+              let hasVisible = false;
+              while (sibling && !sibling.classList.contains("dep-direction-row")) {
+                if ((sibling as HTMLTableRowElement).dataset?.line && sibling.style.display !== "none") {
+                  hasVisible = true;
+                  break;
+                }
+                sibling = sibling.nextElementSibling as HTMLElement | null;
+              }
+              dirRow.style.display = hasVisible ? "" : "none";
             });
           });
         });

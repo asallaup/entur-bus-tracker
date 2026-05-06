@@ -198,6 +198,14 @@ html, body, #root {
 
 .dep-row--open .dep-chevron { transform: rotate(90deg); }
 
+.dep-via {
+  display: block;
+  font-size: 10px;
+  font-style: italic;
+  color: #2a9d8f;
+  margin-top: 1px;
+}
+
 .dep-row { cursor: pointer; }
 .dep-row:hover td { background: #f5f7ff; }
 
@@ -223,6 +231,18 @@ html, body, #root {
 
 .dep-stop-row--link {
   cursor: pointer;
+}
+
+.dep-stop-row--match {
+  font-weight: 600;
+  color: #2a9d8f;
+}
+
+.dep-stop-row--match .dep-stop-name::after {
+  content: " ●";
+  font-size: 7px;
+  vertical-align: middle;
+  opacity: 0.7;
 }
 
 .dep-stop-row--link:hover {
@@ -347,6 +367,18 @@ html, body, #root {
 }
 
 .dep-table tr + tr td { border-top: 1px solid #f2f2f2; }
+
+.dep-direction-row td {
+  border-top: none !important;
+  padding: 10px 0 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #888;
+}
+
+.dep-direction-row:first-child td { padding-top: 2px; }
 
 .dep-badge {
   display: inline-block;

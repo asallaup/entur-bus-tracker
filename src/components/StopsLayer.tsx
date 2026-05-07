@@ -605,7 +605,9 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           className: "stop-tooltip",
           offset: L.point(0, 0),
           minWidth: 10,
-          autoPan: false,
+          autoPan: true,
+          autoPanPaddingTopLeft: L.point(10, 10),
+          autoPanPaddingBottomRight: L.point(10, 10),
         });
 
         let isHovered = false;
@@ -636,8 +638,14 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           popupQuayMarkers.current = [];
           for (const quay of stop.quays ?? []) {
             if (!quay.latitude || !quay.longitude) continue;
+            const quayIcon = L.divIcon({
+              className: "",
+              html: `<div class="stop-dot--quay-popup">${quay.publicCode ?? ""}</div>`,
+              iconSize: [16, 16],
+              iconAnchor: [8, 8],
+            });
             const qm = L.marker([quay.latitude, quay.longitude], {
-              icon: makeQuayIcon(quay.publicCode ?? "", false, false),
+              icon: quayIcon,
               zIndexOffset: 1200,
             }).addTo(map);
             if (quay.publicCode) {
@@ -653,13 +661,12 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           const name = stopNames.current.get(stop.id) ?? stop.name;
           if (popup.isOpen()) { popup.close(); return; }
           showQuayMarkers();
-          // Position popup on the left side of the viewport so quay markers stay visible
+          // Position popup on the right side of the viewport so quay markers stay visible
           const stopPt = map.latLngToContainerPoint([stop.latitude, stop.longitude]);
-          const mapW = map.getSize().x;
+          const mapSize = map.getSize();
           const popupW = 290;
-          const tipX = Math.min(stopPt.x - popupW / 2 - 20, mapW - popupW - 20);
           const anchoredLatLng = map.containerPointToLatLng(
-            L.point(Math.max(popupW / 2 + 10, tipX + popupW / 2), stopPt.y)
+            L.point(mapSize.x - popupW / 2 - 10, stopPt.y)
           );
           popup.setLatLng(anchoredLatLng);
           popup.openOn(map);

@@ -41,7 +41,7 @@ const STOP_ROUTES_QUERY = `
         journeyPatterns {
           line { id publicCode transportMode }
           pointsOnLink { points }
-          quays { id stopPlace { name } }
+          quays { id stopPlace { id name } }
         }
       }
     }
@@ -152,13 +152,14 @@ async function fetchStopRoutes(stopId: string, stopName?: string): Promise<StopR
       body: JSON.stringify({ query: STOP_ROUTES_QUERY, variables: { id: stopId } }),
     });
     const json = await res.json();
-    const quays: Array<{ id: string; journeyPatterns: Array<{ line: { id: string; publicCode: string | null; transportMode: string | null }; pointsOnLink: { points: string } | null; quays: Array<{ id: string; stopPlace: { name: string } | null }> | null }> }> =
+    const quays: Array<{ id: string; journeyPatterns: Array<{ line: { id: string; publicCode: string | null; transportMode: string | null }; pointsOnLink: { points: string } | null; quays: Array<{ id: string; stopPlace: { id: string; name: string } | null }> | null }> }> =
       json.data?.stopPlace?.quays ?? [];
 
     const lineMap = new Map<string, { publicCode: string; shapes: Set<string>; patternSet: Set<string>; patterns: string[][] }>();
     for (const outerQuay of quays) {
       for (const jp of outerQuay.journeyPatterns ?? []) {
-        if (jp.line.transportMode !== "bus" && jp.line.transportMode !== "tram") continue;
+        const mode = jp.line.transportMode;
+        if (mode !== "bus" && mode !== "tram" && mode !== "coach") continue;
         if (!lineMap.has(jp.line.id)) {
           lineMap.set(jp.line.id, { publicCode: jp.line.publicCode ?? jp.line.id, shapes: new Set(), patternSet: new Set(), patterns: [] });
         }
@@ -166,8 +167,14 @@ async function fetchStopRoutes(stopId: string, stopName?: string): Promise<StopR
         const points = jp.pointsOnLink?.points;
         if (points) entry.shapes.add(points);
         const patternQuays = jp.quays ?? [];
-        const currentIdx = patternQuays.findIndex((q) => q.id === outerQuay.id);
-        const futureQuays = currentIdx >= 0 ? patternQuays.slice(currentIdx + 1) : patternQuays;
+        const nameLower = (stopName ?? "").toLowerCase();
+        const currentIdx = patternQuays.findIndex(
+          (q) => q.id === outerQuay.id ||
+                 q.stopPlace?.id === stopId ||
+                 (nameLower !== "" && (q.stopPlace?.name ?? "").toLowerCase() === nameLower)
+        );
+        // If position can't be found, use empty — avoids showing wrong-direction stops
+        const futureQuays = currentIdx >= 0 ? patternQuays.slice(currentIdx + 1) : [];
         const stopNames = futureQuays
           .map((q) => q.stopPlace?.name)
           .filter((n): n is string => !!n)
@@ -827,9 +834,8 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
               const dirPatterns = (routeData?.patterns ?? []).filter(
                 (stops) => dest !== "" && stops.some((n) => n.includes(dest) || dest.includes(n))
               );
-              const routeStops = dirPatterns.length > 0
-                ? dirPatterns.flat()
-                : (routeData?.patterns ?? []).flat();
+              // No fallback — if direction can't be matched, return empty so wrong-direction deps don't match
+              const routeStops = dirPatterns.flat();
               const lineMatch = line.includes(q);
               const destMatch = dest.includes(q);
               const viaStop = q && !lineMatch && !destMatch ? routeStops.find((n) => n.startsWith(q)) : undefined;

@@ -125,6 +125,29 @@ html, body, #root {
   box-shadow: 0 0 0 2px rgba(244,162,97,0.35), 0 1px 4px rgba(0,0,0,0.3);
 }
 
+.stop-dot--platform {
+  background: #5c7cfa;
+  border-color: white;
+  color: white;
+  font-size: 8px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stop-label-platform {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: #5c7cfa;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+
 .stop-dot--hl {
   width: 22px;
   height: 22px;
@@ -144,6 +167,7 @@ html, body, #root {
 }
 
 .stop-tooltip::before { display: none !important; }
+.stop-tooltip .leaflet-popup-tip-container { display: none !important; }
 
 /* Vehicle tooltip */
 .veh-tooltip {
@@ -197,6 +221,30 @@ html, body, #root {
 }
 
 .dep-row--open .dep-chevron { transform: rotate(90deg); }
+
+.dep-platform {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: #5c7cfa;
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  letter-spacing: 0.4px;
+}
+
+.dep-stop-platform {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 9px;
+  background: #e8eaf0;
+  color: #555;
+  border-radius: 3px;
+  padding: 0 3px;
+  vertical-align: middle;
+}
 
 .dep-via {
   display: block;
@@ -379,6 +427,27 @@ html, body, #root {
 }
 
 .dep-direction-row:first-child td { padding-top: 2px; }
+
+.dep-platform-row td {
+  border-top: none !important;
+  padding: 10px 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #333;
+  border-bottom: 2px solid #5c7cfa;
+}
+
+.dep-platform-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #5c7cfa;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
 
 .dep-badge {
   display: inline-block;

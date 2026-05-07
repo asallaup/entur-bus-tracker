@@ -14,6 +14,7 @@ const DEPARTURES_QUERY = `
         expectedDepartureTime
         aimedDepartureTime
         destinationDisplay { frontText }
+        quay { publicCode }
         serviceJourney { id line { publicCode transportMode } }
       }
     }
@@ -23,7 +24,7 @@ const DEPARTURES_QUERY = `
 const JOURNEY_STOPS_QUERY = `
   query($id: String!) {
     serviceJourney(id: $id) {
-      quays { name stopPlace { id name latitude longitude } }
+      quays { publicCode name stopPlace { id name latitude longitude } }
       passingTimes {
         arrival { time }
         departure { time }
@@ -201,6 +202,7 @@ interface Departure {
   realtime: boolean;
   mode: string;
   journeyId: string;
+  platform: string;
 }
 
 interface StopCall {
@@ -209,6 +211,7 @@ interface StopCall {
   stopPlaceId: string;
   lat: number;
   lng: number;
+  platform: string;
 }
 
 interface DepartureCache {
@@ -237,6 +240,7 @@ async function fetchJourneyStops(journeyId: string): Promise<StopCall[]> {
       stopPlaceId: quays[i]?.stopPlace?.id ?? "",
       lat: quays[i]?.stopPlace?.latitude ?? 0,
       lng: quays[i]?.stopPlace?.longitude ?? 0,
+      platform: quays[i]?.publicCode ?? "",
     }));
     journeyStopsCache.set(journeyId, data);
     return data;
@@ -268,6 +272,7 @@ async function fetchDepartures(stopId: string): Promise<Departure[]> {
       realtime: c.realtime,
       mode: c.serviceJourney?.line?.transportMode ?? "",
       journeyId: c.serviceJourney?.id ?? "",
+      platform: c.quay?.publicCode ?? "",
     }));
     departureCache.set(stopId, { data, at: Date.now() });
     return data;
@@ -338,35 +343,55 @@ function departureTable(stopId: string, name: string, deps: Departure[]): string
     return `<div class="stop-popup"><div class="stop-popup-header"><strong>${name}</strong>${favButton(stopId)}</div><p class="stop-nodep">No upcoming departures</p></div>`;
   }
 
-  const groups = new Map<string, Departure[]>();
+  const hasPlatforms = deps.some((d) => d.platform !== "");
+
+  // Group by platform, then by direction within each platform
+  const platformGroups = new Map<string, Departure[]>();
   for (const dep of deps) {
-    const key = dep.destination || "?";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(dep);
+    const key = dep.platform || "";
+    if (!platformGroups.has(key)) platformGroups.set(key, []);
+    platformGroups.get(key)!.push(dep);
   }
-  const sortedGroups = [...groups.entries()].sort(
-    ([, a], [, b]) => a[0].expected.getTime() - b[0].expected.getTime()
+  const sortedPlatforms = [...platformGroups.entries()].sort(([a], [b]) =>
+    a === "" ? 1 : b === "" ? -1 : a.localeCompare(b, undefined, { numeric: true })
   );
 
-  const rows = sortedGroups.map(([destination, groupDeps]) => {
-    const depRows = groupDeps.map((d) => {
-      const delayMin = Math.round(d.delaySecs / 60);
-      const delayHtml =
-        delayMin > 2
-          ? `<span class="dep-late dep-delay-inline">+${delayMin}m</span>`
-          : delayMin < -1
-          ? `<span class="dep-early dep-delay-inline">${delayMin}m</span>`
-          : "";
-      const mins = minutesUntil(d.expected);
-      const minsClass = mins === "now" ? " dep-minutes--now" : "";
-      const rt = d.realtime ? "" : `<span class="dep-noRT" title="No realtime data">~ </span>`;
-      return `<tr data-line="${d.line}" data-dest="${d.destination}" data-journey-id="${d.journeyId}" class="dep-row">
-        <td><span class="dep-badge" style="background:${lineColor(d.line)}">${d.line}</span></td>
-        <td class="dep-time-cell">${rt}<span class="dep-minutes${minsClass}">${mins}</span> <span class="dep-clock">${formatTime(d.expected)}</span>${delayHtml}</td>
-        <td class="dep-chevron">›</td>
-      </tr>`;
+  const rows = sortedPlatforms.map(([platform, platformDeps]) => {
+    const dirGroups = new Map<string, Departure[]>();
+    for (const dep of platformDeps) {
+      const key = dep.destination || "?";
+      if (!dirGroups.has(key)) dirGroups.set(key, []);
+      dirGroups.get(key)!.push(dep);
+    }
+    const sortedDirs = [...dirGroups.entries()].sort(
+      ([, a], [, b]) => a[0].expected.getTime() - b[0].expected.getTime()
+    );
+
+    const dirRows = sortedDirs.map(([destination, groupDeps]) => {
+      const depRows = groupDeps.map((d) => {
+        const delayMin = Math.round(d.delaySecs / 60);
+        const delayHtml =
+          delayMin > 2
+            ? `<span class="dep-late dep-delay-inline">+${delayMin}m</span>`
+            : delayMin < -1
+            ? `<span class="dep-early dep-delay-inline">${delayMin}m</span>`
+            : "";
+        const mins = minutesUntil(d.expected);
+        const minsClass = mins === "now" ? " dep-minutes--now" : "";
+        const rt = d.realtime ? "" : `<span class="dep-noRT" title="No realtime data">~ </span>`;
+        return `<tr data-line="${d.line}" data-dest="${d.destination}" data-platform="${d.platform}" data-journey-id="${d.journeyId}" class="dep-row">
+          <td><span class="dep-badge" style="background:${lineColor(d.line)}">${d.line}</span></td>
+          <td class="dep-time-cell">${rt}<span class="dep-minutes${minsClass}">${mins}</span> <span class="dep-clock">${formatTime(d.expected)}</span>${delayHtml}</td>
+          <td class="dep-chevron">›</td>
+        </tr>`;
+      }).join("");
+      return `<tr class="dep-direction-row"><td colspan="3">→ ${destination}</td></tr>${depRows}`;
     }).join("");
-    return `<tr class="dep-direction-row"><td colspan="3">→ ${destination}</td></tr>${depRows}`;
+
+    const platformHeader = hasPlatforms && platform
+      ? `<tr class="dep-platform-row"><td colspan="3"><span class="dep-platform-badge">${platform}</span> Platform ${platform}</td></tr>`
+      : "";
+    return `${platformHeader}${dirRows}`;
   }).join("");
 
   return `<div class="stop-popup">
@@ -378,11 +403,19 @@ function departureTable(stopId: string, name: string, deps: Departure[]): string
   </div>`;
 }
 
+interface StopQuay {
+  id: string;
+  publicCode: string;
+  latitude: number;
+  longitude: number;
+}
+
 interface StopPlace {
   id: string;
   name: string;
   latitude: number;
   longitude: number;
+  quays: StopQuay[];
 }
 
 const STOPS_QUERY = `
@@ -390,7 +423,7 @@ const STOPS_QUERY = `
     stopPlacesByBbox(
       minimumLatitude:$minLat, minimumLongitude:$minLon,
       maximumLatitude:$maxLat, maximumLongitude:$maxLon
-    ) { id name latitude longitude transportMode }
+    ) { id name latitude longitude transportMode quays { id publicCode latitude longitude } }
   }
 `;
 
@@ -437,9 +470,15 @@ const stopIconFav = L.divIcon({
   iconAnchor: [9, 9],
 });
 
-function getStopIcon(stopId: string, isHighlighted: boolean): L.DivIcon {
+function makeQuayIcon(platform: string, isFav: boolean, isHighlighted: boolean): L.DivIcon {
   if (isHighlighted) return stopIconHighlight;
-  if (favStops.has(stopId)) return stopIconFav;
+  if (platform) return L.divIcon({
+    className: "",
+    html: `<div class="stop-dot stop-dot--platform${isFav ? " stop-dot--fav" : ""}">${platform}</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+  if (isFav) return stopIconFav;
   return stopIcon;
 }
 
@@ -447,11 +486,12 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
   const map = useMap();
   const markers = useRef<Map<string, L.Marker>>(new Map());
   const stopNames = useRef<Map<string, string>>(new Map());
+  const quayDataMap = useRef<Map<string, { stopId: string; platform: string }>>(new Map());
+  const popupQuayMarkers = useRef<L.Marker[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopPolylines = useRef<L.Polyline[]>([]);
   const selectedStopId = useRef<string | null>(null);
   const highlightedStopId = useRef<string | null>(null);
-  const highlightedMarker = useRef<L.Marker | null>(null);
   const highlightTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const visibleRef = useRef(visible !== false);
   visibleRef.current = visible !== false;
@@ -460,7 +500,8 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
   const lineStopsRef = useRef<Set<string> | null>(null);
 
   function applyMarkerVisibility(id: string, m: L.Marker) {
-    const filtered = lineStopsRef.current !== null && !lineStopsRef.current.has(id);
+    const stopId = quayDataMap.current.get(id)?.stopId ?? id;
+    const filtered = lineStopsRef.current !== null && !lineStopsRef.current.has(stopId);
     const show = visibleRef.current && !filtered;
     m.setOpacity(show ? 1 : 0);
     if (!show) m.closeTooltip();
@@ -473,8 +514,11 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
 
   useEffect(() => {
     const update = () => {
-      for (const [id, m] of markers.current) {
-        if (highlightedStopId.current !== id) m.setIcon(getStopIcon(id, false));
+      for (const [qId, m] of markers.current) {
+        const data = quayDataMap.current.get(qId);
+        if (data && highlightedStopId.current !== data.stopId) {
+          m.setIcon(makeQuayIcon(data.platform, favStops.has(data.stopId), false));
+        }
       }
     };
     subscribeFavs(update);
@@ -500,18 +544,25 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
     });
   }, [selectedLine]);
 
-  function applyHighlight(stopId: string) {
-    if (highlightedMarker.current) {
-      highlightedMarker.current.setIcon(getStopIcon(highlightedStopId.current!, false));
-      highlightedMarker.current = null;
+  function setQuayIconsForStop(stopId: string, highlighted: boolean) {
+    for (const [qId, m] of markers.current) {
+      const data = quayDataMap.current.get(qId);
+      if (data?.stopId === stopId) {
+        m.setIcon(makeQuayIcon(data.platform, favStops.has(stopId), highlighted));
+      }
     }
+  }
+
+  function applyHighlight(stopId: string) {
+    if (highlightedStopId.current) setQuayIconsForStop(highlightedStopId.current, false);
     if (highlightTimeout.current) { clearTimeout(highlightTimeout.current); highlightTimeout.current = null; }
     highlightedStopId.current = stopId;
-    const m = markers.current.get(stopId);
-    if (m) { m.setIcon(stopIconHighlight); highlightedMarker.current = m; }
+    setQuayIconsForStop(stopId, true);
     highlightTimeout.current = setTimeout(() => {
-      if (highlightedMarker.current) { highlightedMarker.current.setIcon(getStopIcon(stopId, false)); highlightedMarker.current = null; }
-      highlightedStopId.current = null;
+      if (highlightedStopId.current === stopId) {
+        setQuayIconsForStop(stopId, false);
+        highlightedStopId.current = null;
+      }
       highlightTimeout.current = null;
     }, 5000);
   }
@@ -529,28 +580,32 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
     if (map.getZoom() < MIN_ZOOM) {
       for (const m of markers.current.values()) m.remove();
       markers.current.clear();
+      quayDataMap.current.clear();
       return;
     }
     const b = map.getBounds();
     fetchStops(b.getSouth(), b.getWest(), b.getNorth(), b.getEast()).then((stops) => {
       const incoming = new Set(stops.map((s) => s.id));
       for (const [id, m] of markers.current) {
-        if (!incoming.has(id)) { m.remove(); markers.current.delete(id); }
+        if (!incoming.has(id)) { m.remove(); markers.current.delete(id); quayDataMap.current.delete(id); }
       }
       for (const stop of stops) {
         if (markers.current.has(stop.id)) continue;
         stopNames.current.set(stop.id, stop.name);
-        const icon = getStopIcon(stop.id, highlightedStopId.current === stop.id);
-        const marker = L.marker([stop.latitude, stop.longitude], { icon, zIndexOffset: 500 }).addTo(map);
-        if (highlightedStopId.current === stop.id) highlightedMarker.current = marker;
-        applyMarkerVisibility(stop.id, marker);
+        quayDataMap.current.set(stop.id, { stopId: stop.id, platform: "" });
+        const isHighlighted = highlightedStopId.current === stop.id;
+        const icon = makeQuayIcon("", favStops.has(stop.id), isHighlighted);
+        const item = { id: stop.id, lat: stop.latitude, lng: stop.longitude, platform: "" };
+        const marker = L.marker([item.lat, item.lng], { icon, zIndexOffset: 500 }).addTo(map);
+        applyMarkerVisibility(item.id, marker);
 
         const popup = L.popup({
           closeButton: true,
           autoClose: true,
           className: "stop-tooltip",
-          offset: L.point(0, -16),
+          offset: L.point(0, 0),
           minWidth: 10,
+          autoPan: false,
         });
 
         let isHovered = false;
@@ -576,10 +631,37 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
           }, 80);
         };
 
+        const showQuayMarkers = () => {
+          popupQuayMarkers.current.forEach((m) => m.remove());
+          popupQuayMarkers.current = [];
+          for (const quay of stop.quays ?? []) {
+            if (!quay.latitude || !quay.longitude) continue;
+            const qm = L.marker([quay.latitude, quay.longitude], {
+              icon: makeQuayIcon(quay.publicCode ?? "", false, false),
+              zIndexOffset: 1200,
+            }).addTo(map);
+            if (quay.publicCode) {
+              qm.bindTooltip(`<span class="stop-label">${stop.name} · Platform ${quay.publicCode}</span>`, {
+                permanent: false, direction: "right", offset: [6, 0], className: "stop-label-tooltip",
+              });
+            }
+            popupQuayMarkers.current.push(qm);
+          }
+        };
+
         const openDepartures = () => {
           const name = stopNames.current.get(stop.id) ?? stop.name;
           if (popup.isOpen()) { popup.close(); return; }
-          popup.setLatLng([stop.latitude, stop.longitude]);
+          showQuayMarkers();
+          // Position popup on the left side of the viewport so quay markers stay visible
+          const stopPt = map.latLngToContainerPoint([stop.latitude, stop.longitude]);
+          const mapW = map.getSize().x;
+          const popupW = 290;
+          const tipX = Math.min(stopPt.x - popupW / 2 - 20, mapW - popupW - 20);
+          const anchoredLatLng = map.containerPointToLatLng(
+            L.point(Math.max(popupW / 2 + 10, tipX + popupW / 2), stopPt.y)
+          );
+          popup.setLatLng(anchoredLatLng);
           popup.openOn(map);
           if (!stopRoutesCache.has(stop.id)) fetchStopRoutes(stop.id, stopNames.current.get(stop.id) ?? stop.name);
           const cached = departureCache.get(stop.id);
@@ -702,8 +784,9 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
               const stopsHtml = allStops.map((s, i) => {
                 const cls = i < fromIdx ? " dep-stop-row--past" : i === fromIdx ? " dep-stop-row--current" : "";
                 const matchCls = q && i > fromIdx && s.name.toLowerCase().startsWith(q) ? " dep-stop-row--match" : "";
+                const platformBadge = s.platform ? `<span class="dep-stop-platform">${s.platform}</span>` : "";
                 return `<div class="dep-stop-row dep-stop-row--link${cls}${matchCls}" data-lat="${s.lat}" data-lng="${s.lng}" data-stop-id="${s.stopPlaceId}">
-                  <span class="dep-stop-name">${s.name}</span>
+                  <span class="dep-stop-name">${s.name}${platformBadge}</span>
                   <span class="dep-stop-time">${s.time}</span>
                 </div>`;
               }).join("");
@@ -713,6 +796,11 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
               if (cell && currentEl) cell.scrollTop = currentEl.offsetTop - cell.clientHeight / 2;
             });
           });
+        });
+
+        popup.on("remove", () => {
+          popupQuayMarkers.current.forEach((m) => m.remove());
+          popupQuayMarkers.current = [];
         });
 
         popup.on("contentupdate", () => {
@@ -758,7 +846,7 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
             el.querySelectorAll<HTMLElement>("tr.dep-direction-row").forEach((dirRow) => {
               let sibling = dirRow.nextElementSibling as HTMLElement | null;
               let hasVisible = false;
-              while (sibling && !sibling.classList.contains("dep-direction-row")) {
+              while (sibling && !sibling.classList.contains("dep-direction-row") && !sibling.classList.contains("dep-platform-row")) {
                 if ((sibling as HTMLTableRowElement).dataset?.line && sibling.style.display !== "none") {
                   hasVisible = true;
                   break;
@@ -767,10 +855,22 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
               }
               dirRow.style.display = hasVisible ? "" : "none";
             });
+            el.querySelectorAll<HTMLElement>("tr.dep-platform-row").forEach((platRow) => {
+              let sibling = platRow.nextElementSibling as HTMLElement | null;
+              let hasVisible = false;
+              while (sibling && !sibling.classList.contains("dep-platform-row")) {
+                if ((sibling as HTMLTableRowElement).dataset?.line && sibling.style.display !== "none") {
+                  hasVisible = true;
+                  break;
+                }
+                sibling = sibling.nextElementSibling as HTMLElement | null;
+              }
+              platRow.style.display = hasVisible ? "" : "none";
+            });
           });
         });
 
-        markers.current.set(stop.id, marker);
+        markers.current.set(item.id, marker);
       }
       updateLabelVisibility();
     });
@@ -788,6 +888,8 @@ export function StopsLayer({ visible, routesVisible, selectedLine }: { visible?:
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (highlightTimeout.current) clearTimeout(highlightTimeout.current);
       clearStopRoutes();
+      popupQuayMarkers.current.forEach((m) => m.remove());
+      popupQuayMarkers.current = [];
       for (const m of markers.current.values()) m.remove();
       markers.current.clear();
     };
